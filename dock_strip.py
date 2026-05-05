@@ -1,19 +1,20 @@
 """
-Centered strip above the Windows taskbar (cannot embed inside the taskbar itself).
+Centered strip flush with the Windows taskbar (cannot embed inside the bar itself).
 
-Shows live CPU / RAM / disk; system + GPU temperature next to CPU when available.
+Shows CPU, system/GPU temps, RAM+GiB, disk, swap, network rates, battery when available.
 """
 
 from __future__ import annotations
 
 import os
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
 
 import psutil
 
-from monitor import HistoryLogger, collect_snapshot, disk_root_path, spike_reports_enabled
+from monitor import HistoryLogger, collect_snapshot, disk_root_path, format_gib_usage, spike_reports_enabled
 from temperature_readings import read_gpu_temp_celsius
 
 
@@ -51,6 +52,15 @@ def _taskbar_bottom_rect() -> tuple[int, int, int, int] | None:
     return None
 
 
+def _fmt_bps(bps: float) -> str:
+    if bps < 512:
+        return f"{bps:.0f}B/s"
+    kb = bps / 1024.0
+    if kb < 1024:
+        return f"{kb:.1f}KB/s"
+    return f"{kb / 1024:.1f}MB/s"
+
+
 def run_dock_main(args: object) -> None:
     from metric_history import DEFAULT_CHART_PATH, DEFAULT_CSV_PATH
     from tray_runner import _open_path, _tray_tooltip, start_tray_daemon_visual
@@ -76,6 +86,8 @@ def run_dock_main(args: object) -> None:
             args, stop, history, csv_path, png_path, on_quit_render_final=False
         )
 
+    net_last: dict[str, float | int | None] = {"t": None, "sent": None, "recv": None}
+
     root = tk.Tk()
     root.title("מוניטור ביצועים")
     root.overrideredirect(True)
@@ -84,37 +96,50 @@ def run_dock_main(args: object) -> None:
     except tk.TclError:
         pass
 
+    # Bottom strip: reads a bit like the taskbar edge (visual “dock”).
+    taskbar_edge = "#1a1c22"
     bg = "#1e2229"
     fg = "#e6e9ef"
     accent = "#8fbcbb"
-    root.configure(bg=bg)
-    font_big = ("Segoe UI", 11) if os.name == "nt" else ("Ubuntu", 11)
-    font_small = ("Segoe UI", 10) if os.name == "nt" else ("Ubuntu", 10)
+    dim = "#b8c0cc"
 
-    top_row = tk.Frame(root, bg=bg)
+    edge = tk.Frame(root, bg=taskbar_edge, height=3)
+    edge.pack(side=tk.BOTTOM, fill=tk.X)
+
+    body = tk.Frame(root, bg=bg)
+    body.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+
+    font_big = ("Segoe UI", 10) if os.name == "nt" else ("Ubuntu", 10)
+    font_small = ("Segoe UI", 9) if os.name == "nt" else ("Ubuntu", 9)
+
+    top_row = tk.Frame(body, bg=bg)
     lbl_cpu = tk.Label(top_row, text="CPU …", bg=bg, fg=fg, font=font_big, anchor="w")
     lbl_temp = tk.Label(top_row, text="טמפ …", bg=bg, fg=accent, font=font_small, anchor="e")
-    lbl_cpu.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=20, pady=6)
-    lbl_temp.pack(side=tk.RIGHT, padx=20, pady=6)
+    lbl_cpu.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=16, pady=4)
+    lbl_temp.pack(side=tk.RIGHT, padx=16, pady=4)
     top_row.pack(fill=tk.X)
 
     var_line2 = tk.StringVar(value="טוען…")
-    # Tcl on Windows may reject tuple padding on Label (TclError: bad screen distance "0 10").
-    lbl2 = tk.Label(root, textvariable=var_line2, bg=bg, fg=fg, font=font_small, padx=20, pady=8)
+    lbl2 = tk.Label(body, textvariable=var_line2, bg=bg, fg=fg, font=font_small, padx=16, pady=2)
     lbl2.pack(fill=tk.X)
+
+    var_line3 = tk.StringVar(value="")
+    lbl3 = tk.Label(body, textvariable=var_line3, bg=bg, fg=dim, font=font_small, padx=16, pady=4)
+    lbl3.pack(fill=tk.X)
 
     def place_window() -> None:
         root.update_idletasks()
-        w = max(520, min(980, root.winfo_reqwidth() + 24))
-        h = root.winfo_reqheight() + 8
+        w = max(560, min(1040, root.winfo_reqwidth() + 28))
+        h = root.winfo_reqheight() + 4
         sw = root.winfo_screenwidth()
         sh = root.winfo_screenheight()
         rect = _taskbar_bottom_rect()
         if rect:
             top = rect[1]
-            y = max(0, top - h - 2)
+            # Flush with taskbar top (no gap) — sits visually “on” the bar.
+            y = max(0, top - h)
         else:
-            y = max(0, sh - h - 52)
+            y = max(0, sh - h - 48)
         x = max(0, (sw - w) // 2)
         root.geometry(f"{w}x{h}+{x}+{y}")
 
@@ -169,7 +194,8 @@ def run_dock_main(args: object) -> None:
             return
         snap = collect_snapshot(disk_path)
         history.log(snap)
-        lbl_cpu.config(text=f"CPU  {snap.cpu_percent:.0f}%")
+
+        lbl_cpu.config(text=f"CPU  {snap.cpu_percent:.0f}%  ·  {snap.cpu_logical} ליבות")
         temp_parts: list[str] = []
         if snap.temp_celsius is not None:
             temp_parts.append(f"מחשב {snap.temp_celsius:.0f}°C")
@@ -177,8 +203,38 @@ def run_dock_main(args: object) -> None:
         if gt is not None:
             temp_parts.append(f"GPU {gt:.0f}°C")
         lbl_temp.config(text=" · ".join(temp_parts) if temp_parts else "טמפ —")
-        d = "—" if snap.disk_percent is None else f"{snap.disk_percent:.0f}%"
-        var_line2.set(f"RAM {snap.ram_percent:.0f}%  ·  דיסק {d}")
+
+        d_pct = "—" if snap.disk_percent is None else f"{snap.disk_percent:.0f}%"
+        short = snap.disk_path.rstrip("\\/") or snap.disk_path
+        if len(short) > 6:
+            short = short[:5] + "…"
+        var_line2.set(
+            f"RAM {snap.ram_percent:.0f}%  ({format_gib_usage(snap.ram_used, snap.ram_total)})  ·  "
+            f"דיסק {short}: {d_pct}"
+        )
+
+        io = psutil.net_io_counters()
+        now = time.time()
+        net_txt = "רשת …"
+        if net_last["t"] is not None and net_last["sent"] is not None and net_last["recv"] is not None:
+            dt = now - float(net_last["t"])
+            if dt > 0.05:
+                up = (io.bytes_sent - int(net_last["sent"])) / dt
+                dn = (io.bytes_recv - int(net_last["recv"])) / dt
+                net_txt = f"↑{_fmt_bps(up)}  ↓{_fmt_bps(dn)}"
+        net_last["t"] = now
+        net_last["sent"] = io.bytes_sent
+        net_last["recv"] = io.bytes_recv
+
+        extras: list[str] = []
+        if snap.swap_percent is not None:
+            extras.append(f"סוויפ {snap.swap_percent:.0f}%")
+        extras.append(net_txt)
+        if snap.battery_percent is not None:
+            plug = "חשמל" if snap.battery_plugged else "סוללה"
+            extras.append(f"{plug} {snap.battery_percent:.0f}%")
+        var_line3.set("  ·  ".join(extras))
+
         if tray_icon is not None:
             try:
                 tray_icon.title = _tray_tooltip(snap)  # type: ignore[attr-defined]
