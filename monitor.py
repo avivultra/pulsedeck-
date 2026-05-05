@@ -6,6 +6,7 @@ sample is primed at startup so the first screen already shows a real value.
 
 Optional CSV history and PNG charts live under ./history/ next to this file
 (--history). Temperature is shown when sensors or Windows WMI expose it.
+Use --tray to dock in the system tray (notification area by the clock).
 """
 
 from __future__ import annotations
@@ -195,9 +196,47 @@ def render_snapshot(s: Snapshot, *, no_clear: bool) -> None:
         print("Press Ctrl+C to stop.")
 
 
+class HistoryLogger:
+    """Append CSV rows and refresh the chart; shared by console and tray modes."""
+
+    def __init__(self, enabled: bool, csv_path: Path, png_path: Path, plot_every: int) -> None:
+        self.enabled = enabled
+        self.csv_path = csv_path
+        self.png_path = png_path
+        self.plot_every = plot_every
+        self.rows_logged = 0
+
+    def log(self, snap: Snapshot) -> None:
+        if not self.enabled:
+            return
+        now = time.time()
+        append_metrics_row(
+            self.csv_path,
+            unix_time=now,
+            cpu_percent=snap.cpu_percent,
+            ram_percent=snap.ram_percent,
+            disk_percent=snap.disk_percent,
+            swap_percent=snap.swap_percent,
+            temp_celsius=snap.temp_celsius,
+        )
+        self.rows_logged += 1
+        if self.plot_every > 0 and self.rows_logged % self.plot_every == 0:
+            try:
+                render_history_chart(self.csv_path, self.png_path)
+            except Exception:
+                pass
+
+    def render_final(self) -> None:
+        if self.enabled and self.rows_logged:
+            try:
+                render_history_chart(self.csv_path, self.png_path)
+            except Exception:
+                pass
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Live CPU, RAM, disk, swap, uptime, temperature; optional CSV/PNG history.",
+        description="Live CPU, RAM, disk, swap, uptime, temperature; optional CSV/PNG history; optional tray.",
     )
     p.add_argument(
         "--interval",
@@ -240,6 +279,18 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="N",
         help="Redraw chart every N new rows; 0 = no redraw while running (still refreshes on exit).",
     )
+    p.add_argument(
+        "--tray",
+        action="store_true",
+        help="Run in the system tray (next to the clock) instead of the terminal loop.",
+    )
+    p.add_argument(
+        "--tray-interval",
+        type=float,
+        default=5.0,
+        metavar="SEC",
+        help="Seconds between tray tooltip updates (default: 5).",
+    )
     return p
 
 
@@ -250,45 +301,35 @@ def main() -> None:
         parser.error("--interval must be positive.")
     if args.plot_every < 0:
         parser.error("--plot-every must be >= 0.")
+    if args.tray and args.once:
+        parser.error("Cannot combine --tray with --once.")
+
+    if args.tray:
+        if args.tray_interval <= 0:
+            parser.error("--tray-interval must be positive.")
+        psutil.cpu_percent(interval=0.1)
+        from tray_runner import run_tray_main
+
+        run_tray_main(args)
+        return
 
     psutil.cpu_percent(interval=0.1)
     disk_path = disk_root_path()
 
     csv_path = Path(args.history_csv) if args.history_csv is not None else DEFAULT_CSV_PATH
     png_path = Path(args.chart_png) if args.chart_png is not None else DEFAULT_CHART_PATH
-    history_on = args.history
-    rows_logged = 0
-
-    def log_history_row(snap: Snapshot) -> None:
-        nonlocal rows_logged
-        if not history_on:
-            return
-        now = time.time()
-        append_metrics_row(
-            csv_path,
-            unix_time=now,
-            cpu_percent=snap.cpu_percent,
-            ram_percent=snap.ram_percent,
-            disk_percent=snap.disk_percent,
-            swap_percent=snap.swap_percent,
-            temp_celsius=snap.temp_celsius,
-        )
-        rows_logged += 1
-        if args.plot_every > 0 and rows_logged % args.plot_every == 0:
-            try:
-                render_history_chart(csv_path, png_path)
-            except Exception:
-                pass
+    history = HistoryLogger(
+        enabled=bool(args.history),
+        csv_path=csv_path,
+        png_path=png_path,
+        plot_every=int(args.plot_every),
+    )
 
     if args.once:
         snap = collect_snapshot(disk_path)
         render_snapshot(snap, no_clear=args.no_clear)
-        log_history_row(snap)
-        if history_on and rows_logged:
-            try:
-                render_history_chart(csv_path, png_path)
-            except Exception:
-                pass
+        history.log(snap)
+        history.render_final()
         return
 
     first_tick = True
@@ -298,17 +339,13 @@ def main() -> None:
             if args.no_clear and not first_tick:
                 print()
             render_snapshot(snap, no_clear=args.no_clear)
-            log_history_row(snap)
+            history.log(snap)
             first_tick = False
             time.sleep(args.interval)
     except KeyboardInterrupt:
         sys.stdout.write("\nMonitoring stopped.\n")
     finally:
-        if history_on and rows_logged:
-            try:
-                render_history_chart(csv_path, png_path)
-            except Exception:
-                pass
+        history.render_final()
 
 
 if __name__ == "__main__":

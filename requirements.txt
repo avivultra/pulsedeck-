@@ -1,2 +1,4 @@
 psutil>=5.9,<8
 matplotlib>=3.7,<4
+pystray>=0.19,<1
+Pillow>=10,<12
