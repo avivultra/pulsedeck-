@@ -94,12 +94,13 @@ def run_dock_main(args: object) -> None:
     top_row = tk.Frame(root, bg=bg)
     lbl_cpu = tk.Label(top_row, text="CPU …", bg=bg, fg=fg, font=font_big, anchor="w")
     lbl_temp = tk.Label(top_row, text="טמפ …", bg=bg, fg=accent, font=font_small, anchor="e")
-    lbl_cpu.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(20, 8), pady=(10, 2))
-    lbl_temp.pack(side=tk.RIGHT, padx=(8, 20), pady=(10, 2))
+    lbl_cpu.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=20, pady=6)
+    lbl_temp.pack(side=tk.RIGHT, padx=20, pady=6)
     top_row.pack(fill=tk.X)
 
     var_line2 = tk.StringVar(value="טוען…")
-    lbl2 = tk.Label(root, textvariable=var_line2, bg=bg, fg=fg, font=font_small, padx=20, pady=(0, 10))
+    # Tcl on Windows may reject tuple padding on Label (TclError: bad screen distance "0 10").
+    lbl2 = tk.Label(root, textvariable=var_line2, bg=bg, fg=fg, font=font_small, padx=20, pady=8)
     lbl2.pack(fill=tk.X)
 
     def place_window() -> None:
