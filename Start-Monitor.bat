@@ -1,6 +1,7 @@
 @echo off
 setlocal EnableExtensions
 REM Launcher: dock + history + tray. Double-click this file.
+REM If nothing starts: run Start-Monitor-Debug.bat to see the error text.
 
 cd /d "%~dp0"
 if not exist "monitor.py" (
