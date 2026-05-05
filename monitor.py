@@ -261,6 +261,8 @@ class HistoryLogger:
 def spike_reports_enabled(args: argparse.Namespace) -> bool:
     if getattr(args, "no_spike_reports", False):
         return False
+    if getattr(args, "spike_reports", False):
+        return True
     return bool(args.history or args.dock or args.tray)
 
 
@@ -294,6 +296,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-spike-reports",
         action="store_true",
         help="Do not append spike hints to history/spike_reports.md.",
+    )
+    p.add_argument(
+        "--spike-reports",
+        action="store_true",
+        help="Always write spike_reports.md in console mode (otherwise spikes run with --history / --dock / --tray).",
     )
     p.add_argument(
         "--history-csv",
