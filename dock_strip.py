@@ -1,13 +1,12 @@
 """
 Centered strip above the Windows taskbar (cannot embed inside the taskbar itself).
 
-Shows live CPU / RAM / disk / temp; optional tray icon driven by the same sampler.
+Shows live CPU / RAM / disk; system + GPU temperature next to CPU when available.
 """
 
 from __future__ import annotations
 
 import os
-import sys
 import threading
 import tkinter as tk
 from pathlib import Path
@@ -15,6 +14,7 @@ from pathlib import Path
 import psutil
 
 from monitor import HistoryLogger, collect_snapshot, disk_root_path, spike_reports_enabled
+from temperature_readings import read_gpu_temp_celsius
 
 
 def _taskbar_bottom_rect() -> tuple[int, int, int, int] | None:
@@ -86,20 +86,26 @@ def run_dock_main(args: object) -> None:
 
     bg = "#1e2229"
     fg = "#e6e9ef"
+    accent = "#8fbcbb"
     root.configure(bg=bg)
-    font = ("Segoe UI", 11) if os.name == "nt" else ("Ubuntu", 11)
-    var_line = tk.StringVar(value="טוען…")
-    lbl = tk.Label(root, textvariable=var_line, bg=bg, fg=fg, font=font, padx=24, pady=8)
-    lbl.pack()
+    font_big = ("Segoe UI", 11) if os.name == "nt" else ("Ubuntu", 11)
+    font_small = ("Segoe UI", 10) if os.name == "nt" else ("Ubuntu", 10)
 
-    def format_line() -> str:
-        return var_line.get()
+    top_row = tk.Frame(root, bg=bg)
+    lbl_cpu = tk.Label(top_row, text="CPU …", bg=bg, fg=fg, font=font_big, anchor="w")
+    lbl_temp = tk.Label(top_row, text="טמפ …", bg=bg, fg=accent, font=font_small, anchor="e")
+    lbl_cpu.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(20, 8), pady=(10, 2))
+    lbl_temp.pack(side=tk.RIGHT, padx=(8, 20), pady=(10, 2))
+    top_row.pack(fill=tk.X)
+
+    var_line2 = tk.StringVar(value="טוען…")
+    lbl2 = tk.Label(root, textvariable=var_line2, bg=bg, fg=fg, font=font_small, padx=20, pady=(0, 10))
+    lbl2.pack(fill=tk.X)
 
     def place_window() -> None:
         root.update_idletasks()
-        lbl.update_idletasks()
-        w = max(480, min(960, lbl.winfo_reqwidth() + 48))
-        h = lbl.winfo_reqheight() + 16
+        w = max(520, min(980, root.winfo_reqwidth() + 24))
+        h = root.winfo_reqheight() + 8
         sw = root.winfo_screenwidth()
         sh = root.winfo_screenheight()
         rect = _taskbar_bottom_rect()
@@ -162,9 +168,16 @@ def run_dock_main(args: object) -> None:
             return
         snap = collect_snapshot(disk_path)
         history.log(snap)
-        t = "—" if snap.temp_celsius is None else f"{snap.temp_celsius:.0f}°C"
+        lbl_cpu.config(text=f"CPU  {snap.cpu_percent:.0f}%")
+        temp_parts: list[str] = []
+        if snap.temp_celsius is not None:
+            temp_parts.append(f"מחשב {snap.temp_celsius:.0f}°C")
+        gt = read_gpu_temp_celsius()
+        if gt is not None:
+            temp_parts.append(f"GPU {gt:.0f}°C")
+        lbl_temp.config(text=" · ".join(temp_parts) if temp_parts else "טמפ —")
         d = "—" if snap.disk_percent is None else f"{snap.disk_percent:.0f}%"
-        var_line.set(f"  CPU {snap.cpu_percent:.0f}%    RAM {snap.ram_percent:.0f}%    דיסק {d}    טמפ {t}  ")
+        var_line2.set(f"RAM {snap.ram_percent:.0f}%  ·  דיסק {d}")
         if tray_icon is not None:
             try:
                 tray_icon.title = _tray_tooltip(snap)  # type: ignore[attr-defined]

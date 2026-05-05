@@ -26,7 +26,7 @@ from metric_history import (
     append_metrics_row,
     render_history_chart,
 )
-from temperature_readings import read_primary_temp_celsius
+from temperature_readings import read_gpu_temp_celsius, read_primary_temp_celsius
 
 
 @dataclass(frozen=True)
@@ -163,11 +163,16 @@ def render_snapshot(s: Snapshot, *, no_clear: bool) -> None:
     print("System Monitor")
     print("-" * width)
     print(f"{'CPUs (logical)':<{label_w}}: {s.cpu_logical}")
-    print(f"{'CPU':<{label_w}}: {s.cpu_percent:5.1f}%  {ascii_bar(s.cpu_percent)}")
+    gpu_t = read_gpu_temp_celsius()
+    temp_bits: list[str] = []
     if s.temp_celsius is not None:
-        print(f"{'Temperature':<{label_w}}: {s.temp_celsius:5.1f} °C")
-    else:
-        print(f"{'Temperature':<{label_w}}: (n/a)")
+        temp_bits.append(f"מחשב {s.temp_celsius:.0f}°C")
+    if gpu_t is not None:
+        temp_bits.append(f"GPU {gpu_t:.0f}°C")
+    temp_suffix = ("  (" + " · ".join(temp_bits) + ")") if temp_bits else ""
+    print(f"{'CPU':<{label_w}}: {s.cpu_percent:5.1f}%  {ascii_bar(s.cpu_percent)}{temp_suffix}")
+    if not temp_bits:
+        print(f"{'Temperature':<{label_w}}: (n/a — psutil / WMI / nvidia-smi)")
     print(
         f"{'RAM':<{label_w}}: {s.ram_percent:5.1f}%  {ascii_bar(s.ram_percent)}  "
         f"({format_gib_usage(s.ram_used, s.ram_total)})"

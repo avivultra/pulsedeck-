@@ -21,13 +21,18 @@ from monitor import HistoryLogger, Snapshot, collect_snapshot, disk_root_path, s
 
 
 def _tray_tooltip(s: Snapshot) -> str:
+    from temperature_readings import read_gpu_temp_celsius
+
     parts = [f"CPU {s.cpu_percent:.0f}%", f"RAM {s.ram_percent:.0f}%"]
     if s.disk_percent is not None:
         parts.append(f"Disk {s.disk_percent:.0f}%")
     if s.temp_celsius is not None:
-        parts.append(f"{s.temp_celsius:.0f}°C")
-    else:
-        parts.append("Temp —")
+        parts.append(f"Sys {s.temp_celsius:.0f}°C")
+    gt = read_gpu_temp_celsius()
+    if gt is not None:
+        parts.append(f"GPU {gt:.0f}°C")
+    if s.temp_celsius is None and gt is None:
+        parts.append("temp —")
     return " · ".join(parts)
 
 
