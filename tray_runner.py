@@ -17,7 +17,7 @@ import pystray
 from PIL import Image, ImageDraw
 from pystray import Menu, MenuItem
 
-from monitor import HistoryLogger, Snapshot, collect_snapshot, disk_root_path
+from monitor import HistoryLogger, Snapshot, collect_snapshot, disk_root_path, spike_reports_enabled
 
 
 def _tray_tooltip(s: Snapshot) -> str:
@@ -61,22 +61,15 @@ def _open_path(path: Path) -> None:
         subprocess.Popen(["xdg-open", str(path)])
 
 
-def run_tray_main(args: object) -> None:
-    """Entry from monitor.main() when --tray is set."""
-    from metric_history import DEFAULT_CHART_PATH, DEFAULT_CSV_PATH
-
-    tray_interval = float(args.tray_interval)
-    csv_path = Path(args.history_csv) if args.history_csv is not None else DEFAULT_CSV_PATH
-    png_path = Path(args.chart_png) if args.chart_png is not None else DEFAULT_CHART_PATH
-    disk_path = disk_root_path()
-    history = HistoryLogger(
-        enabled=bool(args.history),
-        csv_path=csv_path,
-        png_path=png_path,
-        plot_every=int(args.plot_every),
-    )
-    stop = threading.Event()
-
+def build_tray_icon(
+    args: object,
+    stop: threading.Event,
+    history: HistoryLogger,
+    csv_path: Path,
+    png_path: Path,
+    *,
+    on_quit_render_final: bool = True,
+) -> pystray.Icon:
     def on_open_chart(_icon: pystray.Icon, _item: pystray.MenuItem | None = None) -> None:
         if png_path.exists():
             _open_path(png_path)
@@ -90,7 +83,8 @@ def run_tray_main(args: object) -> None:
 
     def on_quit(icon: pystray.Icon, _item: pystray.MenuItem | None = None) -> None:
         stop.set()
-        history.render_final()
+        if on_quit_render_final:
+            history.render_final()
         icon.stop()
 
     menu = Menu(
@@ -101,12 +95,48 @@ def run_tray_main(args: object) -> None:
     )
 
     image = _create_icon_image()
-    icon = pystray.Icon(
+    return pystray.Icon(
         "graph_performance_monitor",
         image,
         menu=menu,
         title="מוניטור ביצועים",
     )
+
+
+def start_tray_daemon_visual(
+    args: object,
+    stop: threading.Event,
+    history: HistoryLogger,
+    csv_path: Path,
+    png_path: Path,
+    *,
+    on_quit_render_final: bool = False,
+) -> pystray.Icon:
+    """Tray without a metrics worker — use when --dock owns the sampling loop."""
+    icon = build_tray_icon(
+        args, stop, history, csv_path, png_path, on_quit_render_final=on_quit_render_final
+    )
+    threading.Thread(target=icon.run, name="pystray-loop", daemon=True).start()
+    return icon
+
+
+def run_tray_main(args: object) -> None:
+    """Tray-only mode: blocks until the user chooses Quit."""
+    from metric_history import DEFAULT_CHART_PATH, DEFAULT_CSV_PATH
+
+    stop = threading.Event()
+    tray_interval = float(args.tray_interval)
+    csv_path = Path(args.history_csv) if args.history_csv is not None else DEFAULT_CSV_PATH
+    png_path = Path(args.chart_png) if args.chart_png is not None else DEFAULT_CHART_PATH
+    disk_path = disk_root_path()
+    history = HistoryLogger(
+        enabled=bool(args.history),
+        csv_path=csv_path,
+        png_path=png_path,
+        plot_every=int(args.plot_every),
+        spike_reports=spike_reports_enabled(args),
+    )
+    icon = build_tray_icon(args, stop, history, csv_path, png_path, on_quit_render_final=True)
 
     def worker() -> None:
         psutil.cpu_percent(interval=0.1)

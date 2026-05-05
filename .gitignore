@@ -5,3 +5,4 @@ __pycache__/
 .Python
 history/*.csv
 history/*.png
+history/spike_reports.md

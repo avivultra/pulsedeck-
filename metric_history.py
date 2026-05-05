@@ -156,9 +156,23 @@ def render_history_chart(
 
     ax1.set_title("System metrics history")
     ax1.set_xlabel("Time")
-    ax1.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+    span_sec = (times[-1] - times[0]).total_seconds()
+    if span_sec < 7200:
+        ax1.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+    else:
+        ax1.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
     fig.autofmt_xdate()
     fig.tight_layout()
+    fig.subplots_adjust(bottom=0.2)
+    last_t = temps[-1] if temps else None
+    t_txt = "—" if last_t is None else f"{last_t:.1f}°C"
+    d_last = disk[-1] if disk else None
+    d_txt = "—" if d_last is None else f"{d_last:.1f}%"
+    summary = (
+        f"Last: {times[-1].strftime('%Y-%m-%d %H:%M:%S')}  |  "
+        f"CPU {cpu[-1]:.1f}%  RAM {ram[-1]:.1f}%  Disk {d_txt}  Temp {t_txt}"
+    )
+    fig.text(0.02, 0.02, summary, fontsize=8, color="#333333", transform=fig.transFigure)
     fig.savefig(png_path)
     plt.close(fig)
     return True

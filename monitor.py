@@ -6,7 +6,7 @@ sample is primed at startup so the first screen already shows a real value.
 
 Optional CSV history and PNG charts live under ./history/ next to this file
 (--history). Temperature is shown when sensors or Windows WMI expose it.
-Use --tray to dock in the system tray (notification area by the clock).
+Use --tray for the notification area, or --dock for a centered strip above the taskbar.
 """
 
 from __future__ import annotations
@@ -199,14 +199,38 @@ def render_snapshot(s: Snapshot, *, no_clear: bool) -> None:
 class HistoryLogger:
     """Append CSV rows and refresh the chart; shared by console and tray modes."""
 
-    def __init__(self, enabled: bool, csv_path: Path, png_path: Path, plot_every: int) -> None:
+    def __init__(
+        self,
+        enabled: bool,
+        csv_path: Path,
+        png_path: Path,
+        plot_every: int,
+        *,
+        spike_reports: bool = False,
+        spike_report_path: Path | None = None,
+    ) -> None:
+        from metric_history import DEFAULT_HISTORY_DIR
+
         self.enabled = enabled
         self.csv_path = csv_path
         self.png_path = png_path
         self.plot_every = plot_every
         self.rows_logged = 0
+        self.spike_reports = spike_reports
+        self.spike_report_path = spike_report_path or (DEFAULT_HISTORY_DIR / "spike_reports.md")
+        self._last_snap: Snapshot | None = None
 
     def log(self, snap: Snapshot) -> None:
+        if self.spike_reports:
+            if self._last_snap is not None:
+                try:
+                    from spike_reporter import maybe_append_spike_report
+
+                    maybe_append_spike_report(self._last_snap, snap, self.spike_report_path)
+                except Exception:
+                    pass
+            self._last_snap = snap
+
         if not self.enabled:
             return
         now = time.time()
@@ -234,9 +258,15 @@ class HistoryLogger:
                 pass
 
 
+def spike_reports_enabled(args: argparse.Namespace) -> bool:
+    if getattr(args, "no_spike_reports", False):
+        return False
+    return bool(args.history or args.dock or args.tray)
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Live CPU, RAM, disk, swap, uptime, temperature; optional CSV/PNG history; optional tray.",
+        description="Live CPU, RAM, disk, swap, uptime, temperature; history; tray or dock strip.",
     )
     p.add_argument(
         "--interval",
@@ -259,6 +289,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--history",
         action="store_true",
         help="Append each sample to CSV under ./history/ (next to this script).",
+    )
+    p.add_argument(
+        "--no-spike-reports",
+        action="store_true",
+        help="Do not append spike hints to history/spike_reports.md.",
     )
     p.add_argument(
         "--history-csv",
@@ -285,6 +320,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Run in the system tray (next to the clock) instead of the terminal loop.",
     )
     p.add_argument(
+        "--dock",
+        action="store_true",
+        help="Floating metrics bar centered just above the taskbar (with --tray: same sampler, tray is visual only).",
+    )
+    p.add_argument(
         "--tray-interval",
         type=float,
         default=5.0,
@@ -303,6 +343,15 @@ def main() -> None:
         parser.error("--plot-every must be >= 0.")
     if args.tray and args.once:
         parser.error("Cannot combine --tray with --once.")
+    if args.dock and args.once:
+        parser.error("Cannot combine --dock with --once.")
+
+    if args.dock:
+        psutil.cpu_percent(interval=0.1)
+        from dock_strip import run_dock_main
+
+        run_dock_main(args)
+        return
 
     if args.tray:
         if args.tray_interval <= 0:
@@ -323,6 +372,7 @@ def main() -> None:
         csv_path=csv_path,
         png_path=png_path,
         plot_every=int(args.plot_every),
+        spike_reports=spike_reports_enabled(args),
     )
 
     if args.once:
