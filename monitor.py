@@ -409,6 +409,12 @@ def build_parser(cfg: dict) -> argparse.ArgumentParser:
         help="Minimum seconds between alert pop-ups (default: 300).",
     )
     p.add_argument(
+        "--janitor",
+        action=argparse.BooleanOptionalAction,
+        default=bool(cfg.get("janitor", {}).get("enabled", True)),
+        help="Run the Health Janitor background scanner (conhost zombies).",
+    )
+    p.add_argument(
         "--save-config",
         action="store_true",
         help="Save the effective configuration back to config.json and continue.",
@@ -544,6 +550,20 @@ def main() -> None:
         disk_path = args.disk_path
     else:
         disk_path = disk_root_path()
+
+    # Janitor — background scanner for conhost zombies (start eagerly so the
+    # dock indicator can show counts on first tick).
+    janitor_cfg = effective.get("janitor", {})
+    if janitor_cfg.get("enabled", True) and getattr(args, "janitor", True):
+        try:
+            from janitor import get_default_janitor
+
+            get_default_janitor(
+                scan_interval_seconds=float(janitor_cfg.get("scan_interval_minutes", 5)) * 60,
+                conhost_threshold=int(janitor_cfg.get("conhost_threshold_per_parent", 20)),
+            )
+        except Exception:
+            log.exception("Could not start Janitor scanner")
 
     # Alert dispatcher (shared across modes; gates by cooldown)
     args._alert_dispatcher = None

@@ -153,11 +153,25 @@ def run_dock_main(args: object) -> None:
     body.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
     top_row = tk.Frame(body, bg=bg)
+    # Janitor indicator (left side, hidden when zombie count == 0)
+    lbl_janitor = tk.Label(top_row, text="", bg=bg, fg="#ebcb8b",
+                           font=_font(9, bold=True), anchor="w", cursor="hand2")
     lbl_cpu = tk.Label(top_row, text="CPU …", bg=bg, fg=fg, font=_font(10), anchor="w")
     lbl_temp = tk.Label(top_row, text="טמפ …", bg=bg, fg=accent, font=_font(9), anchor="e")
+    # Order matters: pack janitor first on the left so it sits before CPU
     lbl_cpu.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=16, pady=4)
     lbl_temp.pack(side=tk.RIGHT, padx=16, pady=4)
+    # janitor label is packed/forgotten dynamically inside tick()
     top_row.pack(fill=tk.X)
+
+    def _open_janitor_panel(_event=None):
+        try:
+            from janitor import open_cleanup_panel
+            open_cleanup_panel(root)
+        except Exception:
+            log.exception("Failed to open janitor cleanup panel")
+
+    lbl_janitor.bind("<Button-1>", _open_janitor_panel)
 
     var_line2 = tk.StringVar(value="טוען…")
     lbl2 = tk.Label(body, textvariable=var_line2, bg=bg, fg=fg, font=_font(9),
@@ -282,6 +296,7 @@ def run_dock_main(args: object) -> None:
         m = tk.Menu(root, tearoff=0)
         m.add_command(label="פתח גרף חי", command=_open_live_chart)
         m.add_command(label="🔔 זיהוי עומס / התראות", command=_open_alerts_panel)
+        m.add_command(label="🧹 ניקוי תהליכים מיותרים", command=_open_janitor_panel)
         m.add_command(
             label="תיעודים רגילים",
             command=lambda: _open_hist_folder(csv_path),
@@ -362,6 +377,21 @@ def run_dock_main(args: object) -> None:
             plug = "חשמל" if snap.battery_plugged else "סוללה"
             extras.append(f"{plug} {snap.battery_percent:.0f}%")
         var_line3.set("  ·  ".join(extras))
+
+        # Janitor indicator — show "🧹 N" only when zombies detected
+        try:
+            from janitor import get_default_janitor
+            n = get_default_janitor().count_total_zombies()
+        except Exception:
+            n = 0
+        if n > 0:
+            lbl_janitor.config(text=f"🧹 {n}")
+            if not lbl_janitor.winfo_ismapped():
+                lbl_janitor.pack(side=tk.LEFT, padx=(8, 0), pady=4,
+                                 before=lbl_cpu)
+        else:
+            if lbl_janitor.winfo_ismapped():
+                lbl_janitor.pack_forget()
 
         if tray_icon is not None:
             try:

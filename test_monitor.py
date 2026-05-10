@@ -337,5 +337,108 @@ class TestAlertFormatters(unittest.TestCase):
         self.assertTrue(alerts._is_protected(os.getpid(), "anything.exe"))
 
 
+class TestJanitor(unittest.TestCase):
+    """Tests for the conhost-zombie scanner."""
+
+    def _mock_proc(self, pid: int, name: str, ppid: int = 0, rss: int = 0):
+        """Build a fake psutil.Process-like object for process_iter."""
+        from unittest.mock import MagicMock
+        p = MagicMock()
+        p.info = {
+            "pid": pid, "name": name, "ppid": ppid,
+            "memory_info": MagicMock(rss=rss),
+        }
+        return p
+
+    def _patched_iter(self, processes):
+        """Return a context manager patching psutil.process_iter + Process()."""
+        from unittest.mock import patch, MagicMock
+        # Build pid -> name lookup for psutil.Process(ppid).name() resolution
+        names = {p.info["pid"]: p.info["name"] for p in processes}
+
+        def _fake_process(pid):
+            if pid not in names:
+                import psutil
+                raise psutil.NoSuchProcess(pid)
+            m = MagicMock()
+            m.name.return_value = names[pid]
+            return m
+
+        return (patch("janitor.psutil.process_iter", return_value=processes),
+                patch("janitor.psutil.Process", side_effect=_fake_process))
+
+    def test_groups_25_conhost_under_claude(self) -> None:
+        import janitor
+        # parent claude.exe with PID 100, plus 25 conhost children
+        procs = [self._mock_proc(100, "claude.exe", ppid=1)]
+        for i in range(25):
+            procs.append(self._mock_proc(200 + i, "conhost.exe",
+                                         ppid=100, rss=5_000_000))
+        scanner = janitor.JanitorScanner(conhost_threshold=20)
+        p1, p2 = self._patched_iter(procs)
+        with p1, p2:
+            groups = scanner.scan()
+        self.assertEqual(len(groups), 1)
+        g = groups[0]
+        self.assertEqual(g.parent_name, "claude.exe")
+        self.assertEqual(g.parent_pid, 100)
+        self.assertEqual(g.count, 25)
+        self.assertEqual(g.total_rss_bytes, 25 * 5_000_000)
+
+    def test_below_threshold_returns_empty(self) -> None:
+        import janitor
+        procs = [self._mock_proc(100, "claude.exe", ppid=1)]
+        for i in range(19):
+            procs.append(self._mock_proc(200 + i, "conhost.exe", ppid=100))
+        scanner = janitor.JanitorScanner(conhost_threshold=20)
+        p1, p2 = self._patched_iter(procs)
+        with p1, p2:
+            groups = scanner.scan()
+        self.assertEqual(groups, [])
+
+    def test_self_pid_parent_is_excluded(self) -> None:
+        import os, janitor
+        my_pid = os.getpid()
+        # 25 conhost children of THIS process — must be ignored
+        procs = []
+        for i in range(25):
+            procs.append(self._mock_proc(900 + i, "conhost.exe", ppid=my_pid))
+        scanner = janitor.JanitorScanner(conhost_threshold=20)
+        p1, p2 = self._patched_iter(procs)
+        with p1, p2:
+            groups = scanner.scan()
+        self.assertEqual(groups, [])
+
+    def test_unsuspicious_parent_excluded(self) -> None:
+        import janitor
+        # 30 conhost children of an "innocent" parent (not in suspicious list)
+        procs = [self._mock_proc(100, "explorer.exe", ppid=1)]
+        for i in range(30):
+            procs.append(self._mock_proc(200 + i, "conhost.exe", ppid=100))
+        scanner = janitor.JanitorScanner(conhost_threshold=20)
+        p1, p2 = self._patched_iter(procs)
+        with p1, p2:
+            groups = scanner.scan()
+        self.assertEqual(groups, [])
+
+    def test_count_total_zombies_returns_sum(self) -> None:
+        import janitor
+        # Two parents each with 22 zombies → total 44
+        procs = [
+            self._mock_proc(100, "claude.exe", ppid=1),
+            self._mock_proc(101, "node.exe", ppid=1),
+        ]
+        for i in range(22):
+            procs.append(self._mock_proc(200 + i, "conhost.exe", ppid=100, rss=1000))
+        for i in range(22):
+            procs.append(self._mock_proc(300 + i, "conhost.exe", ppid=101, rss=2000))
+        scanner = janitor.JanitorScanner(conhost_threshold=20)
+        p1, p2 = self._patched_iter(procs)
+        with p1, p2:
+            scanner._do_scan()
+        self.assertEqual(scanner.count_total_zombies(), 44)
+        self.assertEqual(len(scanner.get_groups()), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

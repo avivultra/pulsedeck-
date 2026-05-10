@@ -35,6 +35,15 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "font_scale": 1.0,   # 0.7 .. 1.6 — multiplier on font size
         "pinned": True,      # always-on-top: re-asserted every tick when pinned
     },
+    "janitor": {
+        "enabled": True,
+        "scan_interval_minutes": 5,
+        "conhost_threshold_per_parent": 20,
+        "suspicious_parents": [
+            "claude.exe", "electron.exe", "node.exe",
+            "python.exe", "pythonw.exe", "code.exe",
+        ],
+    },
 }
 
 
