@@ -6,6 +6,7 @@ Run via: python monitor.py --tray
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import threading
@@ -14,6 +15,8 @@ from pathlib import Path
 
 import psutil
 import pystray
+
+log = logging.getLogger(__name__)
 from PIL import Image, ImageDraw
 from pystray import Menu, MenuItem
 
@@ -76,10 +79,40 @@ def build_tray_icon(
     on_quit_render_final: bool = True,
 ) -> pystray.Icon:
     def on_open_chart(_icon: pystray.Icon, _item: pystray.MenuItem | None = None) -> None:
-        if png_path.exists():
-            _open_path(png_path)
-        elif csv_path.parent.exists():
-            _open_path(csv_path.parent)
+        try:
+            from live_chart import open_live_chart
+            from metric_history import DEFAULT_REGULAR_DIR
+            # Tray has no Tk root; live_chart will spin up its own.
+            threading.Thread(
+                target=lambda: open_live_chart(DEFAULT_REGULAR_DIR, parent=None),
+                name="live-chart", daemon=True,
+            ).start()
+        except Exception:
+            log.exception("Failed to open live chart from tray")
+
+    def on_open_alerts(_icon: pystray.Icon, _item: pystray.MenuItem | None = None) -> None:
+        def _run() -> None:
+            try:
+                import tkinter as tk
+                from live_chart import _read_today_spikes, _show_alerts_panel
+                from metric_history import DEFAULT_SPIKES_DIR
+                # Standalone Tk root just for this panel
+                root = tk.Tk()
+                root.withdraw()
+                events = _read_today_spikes(DEFAULT_SPIKES_DIR)
+                panel = _show_alerts_panel(root, events)
+                # When the panel closes, exit this thread's mainloop
+                if panel is not None:
+                    panel.protocol("WM_DELETE_WINDOW",
+                                   lambda: (panel.destroy(), root.quit()))
+                    root.mainloop()
+                    try:
+                        root.destroy()
+                    except tk.TclError:
+                        pass
+            except Exception:
+                log.exception("Failed to open alerts panel from tray")
+        threading.Thread(target=_run, name="alerts-panel", daemon=True).start()
 
     def on_open_folder(_icon: pystray.Icon, _item: pystray.MenuItem | None = None) -> None:
         folder = csv_path.parent
@@ -93,7 +126,8 @@ def build_tray_icon(
         icon.stop()
 
     menu = Menu(
-        MenuItem("פתח גרף", on_open_chart, default=True),
+        MenuItem("פתח גרף חי", on_open_chart, default=True),
+        MenuItem("🔔 זיהוי עומס / התראות", on_open_alerts),
         MenuItem("תיקיית היסטוריה", on_open_folder),
         Menu.SEPARATOR,
         MenuItem("יציאה", on_quit),
@@ -133,7 +167,7 @@ def run_tray_main(args: object) -> None:
     tray_interval = float(args.tray_interval)
     csv_path = Path(args.history_csv) if args.history_csv is not None else DEFAULT_CSV_PATH
     png_path = Path(args.chart_png) if args.chart_png is not None else DEFAULT_CHART_PATH
-    disk_path = disk_root_path()
+    disk_path = getattr(args, "disk_path", None) or disk_root_path()
     history = HistoryLogger(
         enabled=bool(args.history),
         csv_path=csv_path,
@@ -141,6 +175,11 @@ def run_tray_main(args: object) -> None:
         plot_every=int(args.plot_every),
         spike_reports=spike_reports_enabled(args),
     )
+    dispatcher = getattr(args, "_alert_dispatcher", None)
+    if dispatcher is not None and spike_reports_enabled(args):
+        from alerts import make_alert_callback
+
+        history.alert_callback = make_alert_callback(dispatcher, root_provider=lambda: None)
     icon = build_tray_icon(args, stop, history, csv_path, png_path, on_quit_render_final=True)
 
     def worker() -> None:
@@ -151,7 +190,7 @@ def run_tray_main(args: object) -> None:
             try:
                 icon.title = _tray_tooltip(snap)
             except Exception:
-                pass
+                log.exception("Failed to update tray tooltip")
             if stop.wait(tray_interval):
                 break
 

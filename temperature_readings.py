@@ -113,6 +113,65 @@ _GPU_CACHE_VAL: float | None = None
 _GPU_CACHE_MONO: float | None = None
 _GPU_CACHE_TTL = 15.0
 
+_GPU_MEM_CACHE: tuple[int, int] | None = None
+_GPU_MEM_MONO: float | None = None
+_GPU_MEM_TTL = 5.0
+
+
+def read_gpu_memory_mib() -> tuple[int, int] | None:
+    """NVIDIA VRAM (used, total) in MiB via nvidia-smi; None if unavailable."""
+    global _GPU_MEM_CACHE, _GPU_MEM_MONO
+    now = time.monotonic()
+    if _GPU_MEM_MONO is not None and (now - _GPU_MEM_MONO) < _GPU_MEM_TTL:
+        return _GPU_MEM_CACHE
+
+    exe = shutil.which("nvidia-smi")
+    if not exe:
+        _GPU_MEM_CACHE = None
+        _GPU_MEM_MONO = now
+        return None
+
+    creationflags = 0
+    if hasattr(subprocess, "CREATE_NO_WINDOW"):
+        creationflags = subprocess.CREATE_NO_WINDOW
+    try:
+        proc = subprocess.run(
+            [exe, "--query-gpu=memory.used,memory.total",
+             "--format=csv,noheader,nounits"],
+            capture_output=True, text=True, timeout=3,
+            creationflags=creationflags,
+        )
+    except (OSError, subprocess.TimeoutExpired, FileNotFoundError):
+        _GPU_MEM_CACHE = None
+        _GPU_MEM_MONO = now
+        return None
+    if proc.returncode != 0:
+        _GPU_MEM_CACHE = None
+        _GPU_MEM_MONO = now
+        return None
+
+    line = (proc.stdout or "").strip().splitlines()
+    if not line:
+        _GPU_MEM_CACHE = None
+        _GPU_MEM_MONO = now
+        return None
+    try:
+        parts = [p.strip() for p in line[0].split(",")]
+        used = int(float(parts[0]))
+        total = int(float(parts[1]))
+    except (ValueError, IndexError):
+        _GPU_MEM_CACHE = None
+        _GPU_MEM_MONO = now
+        return None
+    if total <= 0:
+        _GPU_MEM_CACHE = None
+        _GPU_MEM_MONO = now
+        return None
+
+    _GPU_MEM_CACHE = (used, total)
+    _GPU_MEM_MONO = now
+    return _GPU_MEM_CACHE
+
 
 def read_gpu_temp_celsius() -> float | None:
     """NVIDIA GPU die temperature via nvidia-smi when installed; else None."""

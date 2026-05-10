@@ -48,6 +48,22 @@ def _top_by_rss(limit: int = 8) -> list[tuple[str, int]]:
     return out
 
 
+def detect_spike(prev: Snapshot, curr: Snapshot) -> tuple[bool, str, str]:
+    """Return (is_spike, reason_text, trigger). trigger is 'cpu' | 'ram' | 'both' | ''."""
+    ok, reason = _should_report(prev, curr)
+    if not ok:
+        return False, "", ""
+    has_cpu = "CPU" in reason
+    has_ram = "RAM" in reason
+    if has_cpu and has_ram:
+        trig = "both"
+    elif has_cpu:
+        trig = "cpu"
+    else:
+        trig = "ram"
+    return True, reason, trig
+
+
 def _should_report(prev: Snapshot, curr: Snapshot) -> tuple[bool, str]:
     d_ram = curr.ram_percent - prev.ram_percent
     d_cpu = curr.cpu_percent - prev.cpu_percent
@@ -70,18 +86,45 @@ def _should_report(prev: Snapshot, curr: Snapshot) -> tuple[bool, str]:
 
 
 def maybe_append_spike_report(prev: Snapshot, curr: Snapshot, report_path: Path) -> None:
+    """Append a spike entry. `report_path` may be a directory or a file:
+    - If a directory: write to `<dir>/spikes-YYYY-MM-DD.md` (per-day grouping).
+    - If a file: append directly (legacy behavior).
+    """
     ok, reason = _should_report(prev, curr)
     if not ok:
         return
-    report_path.parent.mkdir(parents=True, exist_ok=True)
+    from datetime import datetime as _dt
+
+    p = Path(report_path)
+    if p.suffix == "" or p.is_dir():
+        p.mkdir(parents=True, exist_ok=True)
+        today = _dt.now().strftime("%Y-%m-%d")
+        target = p / f"spikes-{today}.md"
+    else:
+        target = p
+    target.parent.mkdir(parents=True, exist_ok=True)
+
+    # If today's file is brand new, start with a date heading
+    is_new_file = not target.exists() or target.stat().st_size == 0
+
+    now_str = _dt.now().strftime("%H:%M:%S")
     top = _top_by_rss(8)
-    parts = [
+    parts: list[str] = []
+    if is_new_file:
+        parts.extend([
+            f"# דוח חריגות — {_dt.now().strftime('%Y-%m-%d')}",
+            "",
+            "כל אירוע מתועד עם שעה, סיבה, ומועמדים אפשריים מבין התהליכים.",
+            "",
+            "---",
+        ])
+    parts.extend([
         "",
-        f"## חיווי חריג — {reason}",
+        f"## ⚠ {now_str} — {reason}",
         "",
         f"- **CPU:** {prev.cpu_percent:.1f}% → {curr.cpu_percent:.1f}%",
         f"- **RAM:** {prev.ram_percent:.1f}% → {curr.ram_percent:.1f}%",
-    ]
+    ])
     if curr.disk_percent is not None:
         parts.append(f"- **דיסק:** {curr.disk_percent:.1f}%")
     if curr.temp_celsius is not None:
@@ -102,5 +145,5 @@ def maybe_append_spike_report(prev: Snapshot, curr: Snapshot, report_path: Path)
             "---",
         ]
     )
-    with report_path.open("a", encoding="utf-8") as f:
-        f.write("\n".join(parts))
+    with target.open("a", encoding="utf-8") as f:
+        f.write("\n".join(parts) + "\n")
