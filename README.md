@@ -157,7 +157,9 @@ monitor.py            ← entry point; sets up logging, config, dispatchers
 ├── config.py         ← config.json load/save
 ├── dependencies.py   ← startup checks for psutil / pystray / matplotlib / PIL
 ├── metric_history.py ← CSV append, weekly rotation, archive pruning
-├── temperature_readings.py  ← psutil + WMI + nvidia-smi
+├── temperature_readings.py  ← cached entry point, routes to probe chains
+├── gpu_probes.py            ← NVIDIA / AMD / Intel Arc / Linux sysfs chain
+├── cpu_probes.py            ← psutil / Windows WMI / Linux thermal / macOS
 │
 ├── dock_strip.py     ← Tk dock UI (drag/resize/pin/font-scale)
 ├── tray_runner.py    ← pystray system-tray icon
@@ -197,10 +199,12 @@ Typical footprint: **~80 MB RAM, < 1 % CPU** on a modern desktop.
 pytest test_monitor.py
 ```
 
-38 unit tests cover: config load/save, CSV rotation logic, archive pruning,
+45 unit tests cover: config load/save, CSV rotation logic, archive pruning,
 dependency validation, alert formatters, protected-process guards, spike
 detection, cooldown gating, mute-list suppression, snooze, oscillation dedup,
-janitor scanning rules, parent-name caching.
+janitor scanning rules, parent-name caching, and the GPU/CPU probe-chain
+fallback behaviour (first success wins, exceptions don't poison the chain,
+unavailable probes are skipped).
 
 ---
 
@@ -223,8 +227,9 @@ keeps running.
 | Battery + AC status | Devices with a battery (laptops, tablets) | Hidden in UI |
 | Uptime | **Every machine** | — |
 | Top processes (CPU/RAM) | **Every machine** | — |
-| **CPU temperature** | Machines where the BIOS/motherboard exposes thermal sensors (most laptops, some desktops). Windows uses WMI fallback. | Shows `—` |
-| **GPU temperature, VRAM** | **NVIDIA only** (requires `nvidia-smi`). AMD / Intel Arc / integrated GPUs not supported yet. | Shows `—` |
+| **CPU temperature** | Multi-source probe chain — psutil first, then Windows WMI, then Linux `/sys/class/thermal`, with a macOS placeholder. Covers most modern machines. | Shows `—` |
+| **GPU temperature** | **NVIDIA** (`nvidia-smi`) · **AMD** (`amd-smi` or `rocm-smi`, or Linux `/sys/class/drm/` sysfs fallback) · **Intel Arc / Flex** (`xpu-smi`) | Shows `—` |
+| **GPU VRAM** | **NVIDIA** + **AMD** (with vendor CLI). Linux sysfs fallback is temperature-only. Integrated GPUs partial. | Hidden |
 | Spike alerts, kill, history | **Every machine** | — |
 
 ### OS-specific features

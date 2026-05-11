@@ -410,7 +410,9 @@ the toast for snooze options (15 / 30 / 60 minutes).</p>
 ├── config.py           config.json load/save
 ├── dependencies.py     startup checks for psutil / pystray / matplotlib / PIL
 ├── metric_history.py   CSV append, weekly rotation, archive pruning
-├── temperature_readings.py   psutil + WMI + nvidia-smi
+├── temperature_readings.py   cached entry point → probe chains
+├── gpu_probes.py             NVIDIA / AMD / Intel Arc / Linux sysfs
+├── cpu_probes.py             psutil / WMI / Linux thermal / macOS
 │
 ├── dock_strip.py       Tk dock UI (drag, resize, pin)
 ├── tray_runner.py      pystray system-tray
@@ -432,10 +434,11 @@ surface, easy to read.</p>
 
 <pre><code>pytest test_monitor.py</code></pre>
 
-<p>38 unit tests cover config load/save, CSV rotation, archive pruning,
+<p>45 unit tests cover config load/save, CSV rotation, archive pruning,
 dependency validation, alert formatters, protected-process guards, spike
 detection, cooldown gating, mute-list suppression, snooze, oscillation
-dedup, janitor scanning rules, parent-name caching.</p>
+dedup, janitor scanning rules, parent-name caching, and the GPU/CPU
+probe-chain fallback behaviour.</p>
 
 <h2>Hardware &amp; OS compatibility</h2>
 
@@ -456,8 +459,9 @@ the value simply shows <code>—</code> and the app keeps running.</p>
     <tr><td>Network throughput</td><td><strong>Every machine</strong></td><td>—</td></tr>
     <tr><td>Battery + AC</td><td>Devices with a battery</td><td>Hidden in UI</td></tr>
     <tr><td>Top processes</td><td><strong>Every machine</strong></td><td>—</td></tr>
-    <tr><td><strong>CPU temperature</strong></td><td>Machines whose BIOS exposes thermal sensors (most laptops, some desktops). Windows uses WMI fallback.</td><td>Shows <code>—</code></td></tr>
-    <tr><td><strong>GPU temperature, VRAM</strong></td><td><strong>NVIDIA only</strong> (requires <code>nvidia-smi</code>). AMD / Intel Arc / integrated GPUs not supported yet.</td><td>Shows <code>—</code></td></tr>
+    <tr><td><strong>CPU temperature</strong></td><td>Multi-source probe chain — psutil → Windows WMI → Linux <code>/sys/class/thermal</code> → macOS placeholder. Covers most modern machines.</td><td>Shows <code>—</code></td></tr>
+    <tr><td><strong>GPU temperature</strong></td><td><strong>NVIDIA</strong> (<code>nvidia-smi</code>) · <strong>AMD</strong> (<code>amd-smi</code> / <code>rocm-smi</code> / Linux <code>/sys/class/drm</code> sysfs) · <strong>Intel Arc</strong> (<code>xpu-smi</code>)</td><td>Shows <code>—</code></td></tr>
+    <tr><td><strong>GPU VRAM</strong></td><td><strong>NVIDIA</strong> + <strong>AMD</strong> (with vendor CLI). Linux sysfs fallback is temperature-only.</td><td>Hidden</td></tr>
     <tr><td>Spike alerts, kill, history</td><td><strong>Every machine</strong></td><td>—</td></tr>
   </tbody>
 </table>
@@ -659,7 +663,9 @@ snooze (15 / 30 / 60 דקות).</p>
 ├── config.py           config.json load/save
 ├── dependencies.py     startup checks for psutil / pystray / matplotlib / PIL
 ├── metric_history.py   CSV append, weekly rotation, archive pruning
-├── temperature_readings.py   psutil + WMI + nvidia-smi
+├── temperature_readings.py   cached entry point → probe chains
+├── gpu_probes.py             NVIDIA / AMD / Intel Arc / Linux sysfs
+├── cpu_probes.py             psutil / WMI / Linux thermal / macOS
 │
 ├── dock_strip.py       Tk dock UI (drag, resize, pin)
 ├── tray_runner.py      pystray system-tray
@@ -680,10 +686,11 @@ snooze (15 / 30 / 60 דקות).</p>
 
 <pre><code>pytest test_monitor.py</code></pre>
 
-<p>38 unit tests מכסים: טעינה ושמירה של config, לוגיקת CSV rotation, prune של ארכיון,
+<p>45 unit tests מכסים: טעינה ושמירה של config, לוגיקת CSV rotation, prune של ארכיון,
 ולידציית תלויות, formatters של התראות, הגנות על תהליכים מוגנים, זיהוי spike,
 gating של cooldown, השתקה של mute-list, snooze, dedup של oscillation, כללי
-סריקה של janitor, מטמון של parent-name.</p>
+סריקה של janitor, מטמון של parent-name, ושרשרת ה-probes של GPU/CPU
+(הראשון שמצליח קובע, חריגות לא מרעילות את השרשרת).</p>
 
 <h2>תאימות חומרה ומערכת הפעלה</h2>
 
@@ -703,8 +710,9 @@ Silicon וכו׳. הניטור המרכזי עובד בכל מקום דרך <cod
     <tr><td>תעבורת רשת</td><td><strong>כל מחשב</strong></td><td>—</td></tr>
     <tr><td>סוללה + AC</td><td>מכשירים עם סוללה</td><td>מוסתר ב-UI</td></tr>
     <tr><td>תהליכים מובילים</td><td><strong>כל מחשב</strong></td><td>—</td></tr>
-    <tr><td><strong>טמפ׳ CPU</strong></td><td>מחשבים שה-BIOS חושף בהם חיישנים תרמיים (רוב הלפטופים, חלק מה-desktops). ב-Windows משתמש ב-WMI כ-fallback.</td><td>מציג <code>—</code></td></tr>
-    <tr><td><strong>טמפ׳ GPU, VRAM</strong></td><td><strong>NVIDIA בלבד</strong> (דורש <code>nvidia-smi</code>). AMD / Intel Arc / כרטיסים משולבים לא נתמכים עדיין.</td><td>מציג <code>—</code></td></tr>
+    <tr><td><strong>טמפ׳ CPU</strong></td><td>שרשרת probes מרובת מקורות — psutil ← Windows WMI ← Linux <code>/sys/class/thermal</code> ← macOS placeholder. מכסה את רוב המכונות.</td><td>מציג <code>—</code></td></tr>
+    <tr><td><strong>טמפ׳ GPU</strong></td><td><strong>NVIDIA</strong> (<code>nvidia-smi</code>) · <strong>AMD</strong> (<code>amd-smi</code> / <code>rocm-smi</code> / Linux <code>/sys/class/drm</code> sysfs) · <strong>Intel Arc</strong> (<code>xpu-smi</code>)</td><td>מציג <code>—</code></td></tr>
+    <tr><td><strong>VRAM של GPU</strong></td><td><strong>NVIDIA</strong> + <strong>AMD</strong> (עם CLI של היצרן). ה-fallback של Linux sysfs מספק טמפ׳ בלבד.</td><td>מוסתר</td></tr>
     <tr><td>התראות, הרג, היסטוריה</td><td><strong>כל מחשב</strong></td><td>—</td></tr>
   </tbody>
 </table>
