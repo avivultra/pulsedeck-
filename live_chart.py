@@ -190,7 +190,12 @@ TEMP_C = "#ef4444"   # red-500
 
 
 def _read_rows(history_dir: Path, include_archive: bool, max_rows: int = 50_000) -> list[dict]:
-    """Read CSV rows, sorted by unix_time, optionally merging archives."""
+    """Read CSV rows, sorted by unix_time, optionally merging archives.
+
+    NOTE: full read — used as a fallback. For the hot path inside an open
+    live-chart window, see `_IncrementalCsvReader` which only reads the
+    appended tail since the last refresh.
+    """
     try:
         from metric_history import iter_history_rows
         rows = iter_history_rows(history_dir, include_archive=include_archive)
@@ -198,6 +203,79 @@ def _read_rows(history_dir: Path, include_archive: bool, max_rows: int = 50_000)
         log.exception("Failed to read history rows")
         return []
     return rows[-max_rows:] if len(rows) > max_rows else rows
+
+
+class _IncrementalCsvReader:
+    """Reads only the new tail of metrics.csv since the previous call.
+
+    First call: reads the entire file. Subsequent calls: seek to the byte
+    offset where the previous read stopped and parse just the appended rows.
+    If the file shrinks (e.g. rotation moved old rows to an archive) the
+    cache is invalidated and we re-read from scratch.
+
+    The chart's max_rows window protects memory — once cached_rows exceeds
+    it, we keep only the tail.
+    """
+
+    def __init__(self, csv_path: Path, max_rows: int = 50_000) -> None:
+        self.csv_path = Path(csv_path)
+        self.max_rows = max_rows
+        self._offset = 0
+        self._size = 0
+        self._fieldnames: list[str] | None = None
+        self._rows: list[dict] = []
+
+    def _reset(self) -> None:
+        self._offset = 0
+        self._size = 0
+        self._fieldnames = None
+        self._rows = []
+
+    def read(self) -> list[dict]:
+        try:
+            stat = self.csv_path.stat()
+        except FileNotFoundError:
+            self._reset()
+            return []
+
+        # File shrank (rotation) — invalidate everything
+        if stat.st_size < self._size:
+            log.debug("CSV shrank from %d to %d bytes; invalidating cache",
+                      self._size, stat.st_size)
+            self._reset()
+
+        # No change since last read — return cached
+        if stat.st_size == self._size and self._rows:
+            return list(self._rows)
+
+        try:
+            with self.csv_path.open("r", encoding="utf-8", newline="") as f:
+                if self._offset == 0:
+                    # First read — parse header normally
+                    reader = csv.DictReader(f)
+                    self._fieldnames = list(reader.fieldnames or [])
+                    for row in reader:
+                        self._rows.append(row)
+                    self._offset = f.tell()
+                else:
+                    # Tail read — seek past header + already-consumed rows
+                    f.seek(self._offset)
+                    new_reader = csv.DictReader(f, fieldnames=self._fieldnames)
+                    for row in new_reader:
+                        # Guard: empty trailing line
+                        if not row or not any(row.values()):
+                            continue
+                        self._rows.append(row)
+                    self._offset = f.tell()
+        except OSError:
+            log.exception("Failed to read CSV %s incrementally", self.csv_path)
+            return list(self._rows)
+
+        self._size = stat.st_size
+        # Bound memory — keep only the tail
+        if len(self._rows) > self.max_rows:
+            self._rows = self._rows[-self.max_rows:]
+        return list(self._rows)
 
 
 def _parse_series(rows: list[dict]) -> dict:
@@ -398,8 +476,16 @@ def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
                 return mins
         return 15
 
+    # Incremental reader for the common case (main CSV only, no archive merge).
+    # Avoids re-parsing a 1.5 MB file every 2 seconds.
+    incremental = _IncrementalCsvReader(history_dir / "metrics.csv", max_rows=50_000)
+
     def redraw() -> None:
-        rows = _read_rows(history_dir, include_archive.get())
+        if include_archive.get():
+            # Archive merge requires reading multiple files — bypass incremental
+            rows = _read_rows(history_dir, include_archive=True)
+        else:
+            rows = incremental.read()
         series = _parse_series(rows)
         ax1.clear()
         ax2.clear()

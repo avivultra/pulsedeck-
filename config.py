@@ -28,6 +28,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "cooldown_seconds": 300,
         "top_n": 5,
         "confirm_kill": True,
+        # List of process names (lowercase, .exe included) whose presence in
+        # the top-N is ignored when deciding to show a toast. Useful when one
+        # noisy app (e.g. a video editor) keeps tripping spikes.
+        "muted_processes": [],
+        # Optional non-intrusive sound on toast (uses winsound.MessageBeep)
+        "sound_enabled": False,
     },
     "dock": {
         "x": None,           # None = auto-place; otherwise pixel X

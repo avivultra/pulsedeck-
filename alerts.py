@@ -365,7 +365,9 @@ def _toast_summary(event: AlertEvent) -> tuple[str, str, str]:
 
 
 def _build_toast(event: AlertEvent, parent: tk.Misc | None,
-                 on_open_full: Callable[[], None]) -> tk.Toplevel | tk.Tk:
+                 on_open_full: Callable[[], None],
+                 on_snooze: Callable[[float], None] | None = None,
+                 ) -> tk.Toplevel | tk.Tk:
     """Small notification window pinned bottom-right. Click → open full alert."""
     if parent is None:
         win: tk.Toplevel | tk.Tk = tk.Tk()
@@ -410,8 +412,9 @@ def _build_toast(event: AlertEvent, parent: tk.Misc | None,
     tk.Label(content, text=value_text, bg=PANEL, fg=accent_color,
              font=(MONO_FAMILY, 14, "bold"), anchor="e").pack(fill="x", pady=(4, 2))
 
-    # Hint
-    tk.Label(content, text="לחץ לפתיחת פרטים והרג תהליך",
+    # Hint (also mentions snooze via right-click for discoverability)
+    hint_text = "לחץ לפתיחת פרטים והרג תהליך  ·  קליק ימני להשהיה"
+    tk.Label(content, text=hint_text,
              bg=PANEL, fg=DIM, font=("Segoe UI", 9), anchor="e").pack(fill="x")
 
     # Position: bottom-right above taskbar
@@ -467,18 +470,46 @@ def _build_toast(event: AlertEvent, parent: tk.Misc | None,
 
     close_btn.bind("<Button-1>", lambda _e: _dismiss())
 
+    # Right-click context menu — Snooze options
+    if on_snooze is not None:
+        def _show_snooze_menu(event: tk.Event) -> None:
+            menu = tk.Menu(win, tearoff=0)
+            menu.add_command(label="השהה התראות ל-15 דקות",
+                             command=lambda: (on_snooze(15 * 60), _dismiss()))
+            menu.add_command(label="השהה התראות ל-30 דקות",
+                             command=lambda: (on_snooze(30 * 60), _dismiss()))
+            menu.add_command(label="השהה התראות לשעה",
+                             command=lambda: (on_snooze(60 * 60), _dismiss()))
+            menu.add_separator()
+            menu.add_command(label="סגור", command=_dismiss)
+            try:
+                menu.tk_popup(event.x_root, event.y_root)
+            finally:
+                menu.grab_release()
+        # Bind on the toast body and labels
+        for w in (inner, content, stripe, top_row, title_lbl):
+            w.bind("<Button-3>", _show_snooze_menu)
+        for child in content.winfo_children():
+            child.bind("<Button-3>", _show_snooze_menu)
+
     # Auto-dismiss
     win.after(TOAST_DURATION_MS, _dismiss)
     return win
 
 
-def show_toast(event: AlertEvent, parent: tk.Misc | None = None) -> None:
-    """Show the gentle toast notification. Must be called on the Tk main thread."""
+def show_toast(event: AlertEvent, parent: tk.Misc | None = None,
+               dispatcher: "AlertDispatcher | None" = None) -> None:
+    """Show the gentle toast notification. Must be called on the Tk main thread.
+
+    If `dispatcher` is provided, right-click on the toast offers snooze options.
+    """
     def _open_full() -> None:
         show_alert_window(event, parent)
 
+    on_snooze = dispatcher.snooze if dispatcher is not None else None
+
     try:
-        win = _build_toast(event, parent, _open_full)
+        win = _build_toast(event, parent, _open_full, on_snooze=on_snooze)
     except tk.TclError:
         log.exception("Failed to build toast")
         return
@@ -510,36 +541,101 @@ def make_alert_callback(dispatcher: "AlertDispatcher",
     return _cb
 
 
+def _is_top_mostly_muted(event: "AlertEvent", muted_lower: set[str]) -> bool:
+    """If 3+ of the top CPU/RAM processes are muted, suppress the alert.
+
+    The user has explicitly said this app is "expected to be loud" — only
+    silence when the dominant cause is a process the user already accepted.
+    """
+    if not muted_lower:
+        return False
+    top_names = [p.name.strip().lower() for p in (event.top_cpu + event.top_rss)]
+    if not top_names:
+        return False
+    muted_count = sum(1 for n in top_names if n in muted_lower)
+    return muted_count >= 3
+
+
+def _play_alert_sound() -> None:
+    """Non-intrusive system 'asterisk' beep, Windows-only. Silent on failure."""
+    try:
+        import winsound
+        winsound.MessageBeep(winsound.MB_ICONASTERISK)
+    except Exception:
+        # Not Windows, or sound device unavailable — fine, this is decorative
+        pass
+
+
 class AlertDispatcher:
-    def __init__(self, cooldown_seconds: float = 300.0) -> None:
+    def __init__(self, cooldown_seconds: float = 300.0,
+                 muted_processes: list[str] | None = None,
+                 sound_enabled: bool = False) -> None:
         self.cooldown_seconds = float(cooldown_seconds)
         self._last_fired_at = 0.0
         self._lock = threading.Lock()
+        # Snooze: extends the next gate by this many seconds beyond cooldown.
+        self._snooze_until = 0.0
+        # Mute list (case-insensitive)
+        self._muted = {n.strip().lower() for n in (muted_processes or [])}
+        self.sound_enabled = bool(sound_enabled)
+
+    def snooze(self, seconds: float) -> None:
+        """Push the next allowed fire time forward by `seconds`."""
+        self._snooze_until = time.time() + max(0.0, float(seconds))
+        log.info("Alerts snoozed for %.0f seconds", seconds)
+
+    def add_mute(self, process_name: str) -> None:
+        self._muted.add(process_name.strip().lower())
+
+    def remove_mute(self, process_name: str) -> None:
+        self._muted.discard(process_name.strip().lower())
+
+    @property
+    def muted_processes(self) -> list[str]:
+        return sorted(self._muted)
 
     def _gate(self) -> bool:
         now = time.time()
         with self._lock:
+            if now < self._snooze_until:
+                return False
             if now - self._last_fired_at < self.cooldown_seconds:
                 return False
             self._last_fired_at = now
             return True
 
     def fire(self, event: AlertEvent, root: tk.Misc | None = None) -> bool:
+        # Mute check happens BEFORE gate so a muted spike doesn't burn cooldown.
+        if _is_top_mostly_muted(event, self._muted):
+            log.debug("Alert suppressed (top processes muted): %s", event.reason)
+            return False
+
         if not self._gate():
             # Demoted to DEBUG: at WARNING/INFO this fires on every detected
             # oscillation and floods monitor.log without giving the user any
             # actionable signal (the cooldown is intentional UX).
-            log.debug("Alert suppressed (cooldown active): %s", event.reason)
+            log.debug("Alert suppressed (cooldown/snooze): %s", event.reason)
             return False
         log.info("Alert firing (toast): %s", event.reason)
+        if self.sound_enabled:
+            _play_alert_sound()
+
+        # Bump sampler activity so subsequent ticks run at the faster rate,
+        # giving the toast / full alert window the freshest process data.
+        try:
+            get_default_sampler().notify_activity()
+        except Exception:
+            log.exception("Failed to notify sampler of alert activity")
         if root is not None:
             try:
-                root.after(0, lambda: show_toast(event, root))
+                root.after(0, lambda: show_toast(event, root, dispatcher=self))
             except tk.TclError:
                 log.exception("Failed to schedule toast via root.after")
                 return False
         else:
-            t = threading.Thread(target=show_toast, args=(event, None),
+            t = threading.Thread(target=show_toast,
+                                 args=(event, None),
+                                 kwargs={"dispatcher": self},
                                  name="alert-toast", daemon=True)
             t.start()
         return True

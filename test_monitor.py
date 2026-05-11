@@ -440,5 +440,76 @@ class TestJanitor(unittest.TestCase):
         self.assertEqual(len(scanner.get_groups()), 2)
 
 
+class TestPerformanceAndUx(unittest.TestCase):
+    """Tests for adaptive sampler, mute list, snooze, dedup."""
+
+    def test_sampler_uses_idle_rate_when_inactive(self) -> None:
+        from process_monitor import ProcessSampler
+        s = ProcessSampler(refresh_seconds=1.0, idle_refresh_seconds=4.0,
+                            active_window_seconds=2.0)
+        # No notify_activity yet → idle rate
+        self.assertEqual(s._current_refresh_seconds(), 4.0)
+        s.notify_activity()
+        # Just notified → active rate
+        self.assertEqual(s._current_refresh_seconds(), 1.0)
+
+    def test_dispatcher_snooze_blocks_fire(self) -> None:
+        import alerts as alerts_mod
+        d = alerts_mod.AlertDispatcher(cooldown_seconds=0)
+        # First gate passes
+        self.assertTrue(d._gate())
+        # Snooze for 10s → next gate fails even though cooldown is 0
+        d.snooze(10)
+        self.assertFalse(d._gate())
+
+    def test_dispatcher_mute_list_suppresses(self) -> None:
+        import alerts as alerts_mod
+        from process_monitor import ProcessInfo
+        d = alerts_mod.AlertDispatcher(cooldown_seconds=0,
+                                        muted_processes=["chrome.exe"])
+        # Build top lists where 3+ entries are chrome
+        muted = ProcessInfo(pid=1, name="chrome.exe", cpu_percent=10,
+                            cpu_percent_raw=80, rss_bytes=100,
+                            process_uptime_seconds=10, last_active_seconds_ago=1)
+        other = ProcessInfo(pid=2, name="notepad.exe", cpu_percent=2,
+                            cpu_percent_raw=16, rss_bytes=50,
+                            process_uptime_seconds=10, last_active_seconds_ago=1)
+        event = alerts_mod.AlertEvent(
+            reason="test", trigger="cpu", cpu_before=10, cpu_after=50,
+            ram_before=50, ram_after=51,
+            top_cpu=[muted, muted, muted, other, other],
+            top_rss=[other, other, other, other, other],
+        )
+        self.assertTrue(alerts_mod._is_top_mostly_muted(event, d._muted))
+
+    def test_spike_dedup_oscillation(self) -> None:
+        # Two opposite events within 30s should produce only one md entry
+        import time as _t
+        import spike_reporter
+        from monitor import Snapshot
+
+        def snap(cpu, ram):
+            return Snapshot(cpu_percent=cpu, ram_percent=ram, ram_used=0, ram_total=1,
+                            disk_path="/", disk_percent=None, disk_used=None,
+                            disk_total=None, swap_percent=None, uptime_sec=0,
+                            battery_percent=None, battery_plugged=None,
+                            cpu_logical=8, temp_celsius=None)
+
+        with tempfile.TemporaryDirectory() as d:
+            spike_dir = Path(d)
+            # Reset module-level dedup state
+            spike_reporter._last_event = {"timestamp": 0.0, "direction": ""}
+            # First event: CPU up
+            spike_reporter.maybe_append_spike_report(snap(10, 50), snap(70, 50), spike_dir)
+            # Second event 1s later: CPU down (opposite direction within window)
+            spike_reporter.maybe_append_spike_report(snap(70, 50), snap(20, 50), spike_dir)
+            # Should be exactly one ## heading in the file
+            today = datetime.now().strftime("%Y-%m-%d")
+            f = spike_dir / f"spikes-{today}.md"
+            content = f.read_text(encoding="utf-8")
+            heading_count = content.count("## ⚠")
+            self.assertEqual(heading_count, 1)
+
+
 if __name__ == "__main__":
     unittest.main()

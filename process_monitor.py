@@ -32,8 +32,17 @@ class ProcessSampler:
 
     ACTIVE_CPU_THRESHOLD = 1.0   # raw cpu_percent above which we mark "active"
 
-    def __init__(self, refresh_seconds: float = 2.0) -> None:
-        self._refresh_seconds = max(0.5, float(refresh_seconds))
+    def __init__(self,
+                 refresh_seconds: float = 2.0,
+                 idle_refresh_seconds: float = 5.0,
+                 active_window_seconds: float = 30.0) -> None:
+        # Adaptive sampling: faster when there's recent UI/alert activity,
+        # slower when the system is idle. The default keeps the "live" feel
+        # without the constant 2s overhead when nothing interesting is happening.
+        self._active_refresh = max(0.5, float(refresh_seconds))
+        self._idle_refresh = max(self._active_refresh, float(idle_refresh_seconds))
+        self._active_window = max(5.0, float(active_window_seconds))
+        self._last_activity_at = 0.0   # bumped by notify_activity()
         self._lock = threading.Lock()
         self._snapshot: list[ProcessInfo] = []
         self._cpu_count = max(1, psutil.cpu_count(logical=True) or 1)
@@ -43,6 +52,25 @@ class ProcessSampler:
         self._last_active: dict[int, float] = {}
         self._create_time: dict[int, float] = {}
         self._primed: set[int] = set()  # PIDs that had cpu_percent primed already
+
+    def notify_activity(self) -> None:
+        """Mark the sampler as 'active' (e.g. just after a spike or UI open).
+
+        The next `active_window_seconds` worth of ticks will use the faster
+        refresh rate. After the window elapses without further activity, the
+        sampler slows down again.
+        """
+        self._last_activity_at = time.monotonic()
+
+    def _current_refresh_seconds(self) -> float:
+        if (time.monotonic() - self._last_activity_at) < self._active_window:
+            return self._active_refresh
+        return self._idle_refresh
+
+    @property
+    def _refresh_seconds(self) -> float:
+        """Backward compatibility for any test that read this property."""
+        return self._current_refresh_seconds()
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
@@ -60,7 +88,8 @@ class ProcessSampler:
                 self._tick()
             except Exception:
                 log.exception("Process sampler tick failed")
-            if self._stop.wait(self._refresh_seconds):
+            # Re-evaluate refresh rate on every loop — adaptive
+            if self._stop.wait(self._current_refresh_seconds()):
                 break
 
     def _tick(self) -> None:

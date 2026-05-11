@@ -384,7 +384,10 @@ def prune_old_archives(history_dir: str | Path, weeks_to_keep: int = 12) -> int:
             continue
 
         age_weeks = (now - archive_date).days / 7
-        if age_weeks > weeks_to_keep:
+        # ">=" so an archive that is exactly N weeks old is deleted when
+        # weeks_to_keep=N. Without the equality, the boundary archive lingers
+        # forever (its age never exceeds N by any meaningful margin).
+        if age_weeks >= weeks_to_keep:
             try:
                 archive.unlink()
                 deleted += 1

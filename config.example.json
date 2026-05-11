@@ -1,0 +1,47 @@
+{
+  "ui": {
+    "dock": false,
+    "tray": false,
+    "history": false,
+    "console": true
+  },
+  "disk_path": null,
+  "history_dir": "history",
+  "spike": {
+    "cpu_threshold": 12,
+    "ram_threshold": 6,
+    "enabled": true
+  },
+  "rotation": {
+    "enabled": true,
+    "weeks_to_keep": 12
+  },
+  "log_level": "WARNING",
+  "alerts": {
+    "enabled": true,
+    "cooldown_seconds": 300,
+    "top_n": 5,
+    "confirm_kill": true,
+    "muted_processes": [],
+    "sound_enabled": false
+  },
+  "dock": {
+    "x": null,
+    "y": null,
+    "font_scale": 1.0,
+    "pinned": true
+  },
+  "janitor": {
+    "enabled": true,
+    "scan_interval_minutes": 5,
+    "conhost_threshold_per_parent": 20,
+    "suspicious_parents": [
+      "claude.exe",
+      "electron.exe",
+      "node.exe",
+      "python.exe",
+      "pythonw.exe",
+      "code.exe"
+    ]
+  }
+}

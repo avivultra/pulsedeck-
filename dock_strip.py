@@ -399,11 +399,15 @@ def run_dock_main(args: object) -> None:
             except Exception:
                 log.exception("Failed to update tray tooltip from dock")
         place_counter += 1
-        # Re-place only during initial settle, AND only if user hasn't moved it
-        if place_counter <= 3 and saved_x is None and saved_y is None:
+        # Re-place only during the first two ticks to let the geometry settle.
+        # After that, place_window is only called explicitly (font change, reset
+        # position) — saves a layout pass every tick.
+        if place_counter <= 2 and saved_x is None and saved_y is None:
             place_window()
-        # Re-assert always-on-top so taskbar/other apps can't cover the dock when pinned
-        if pinned:
+        # Re-assert always-on-top so taskbar/other apps can't cover the dock when pinned.
+        # Throttle to every 5th tick (~5s) — Windows respects topmost between
+        # checks; constant re-assertion was wasted work.
+        if pinned and place_counter % 5 == 0:
             try:
                 root.attributes("-topmost", True)
                 root.lift()

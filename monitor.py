@@ -571,7 +571,9 @@ def main() -> None:
         from alerts import AlertDispatcher
 
         args._alert_dispatcher = AlertDispatcher(
-            cooldown_seconds=effective["alerts"]["cooldown_seconds"]
+            cooldown_seconds=effective["alerts"]["cooldown_seconds"],
+            muted_processes=effective["alerts"].get("muted_processes", []),
+            sound_enabled=effective["alerts"].get("sound_enabled", False),
         )
         # Eagerly start the process sampler so the first alert has data ready.
         try:

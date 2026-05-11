@@ -16,6 +16,11 @@ CPU_JUMP_PCT = 12.0
 CPU_HIGH_ABS = 88.0
 RAM_HIGH_ABS = 92.0
 
+# Dedup oscillation: when CPU swings up→down→up within this window, log only
+# the first event (the rest is noise from a single underlying spike).
+_OSCILLATION_WINDOW_SEC = 30.0
+_last_event: dict = {"timestamp": 0.0, "direction": ""}  # module-level state
+
 
 def _fmt_mib(rss: int) -> str:
     return f"{rss / (1024 * 1024):.0f} MiB"
@@ -94,6 +99,21 @@ def maybe_append_spike_report(prev: Snapshot, curr: Snapshot, report_path: Path)
     if not ok:
         return
     from datetime import datetime as _dt
+    import time as _time
+
+    # Oscillation dedup: if this event is the reverse of the previous one
+    # within the window, treat it as part of the same spike and skip.
+    now_mono = _time.monotonic()
+    direction = "up" if "עלה" in reason else ("down" if "ירד" in reason else "")
+    if direction and _last_event["direction"]:
+        elapsed = now_mono - _last_event["timestamp"]
+        opposite = (direction == "up" and _last_event["direction"] == "down") or \
+                   (direction == "down" and _last_event["direction"] == "up")
+        if opposite and elapsed < _OSCILLATION_WINDOW_SEC:
+            # Same spike — don't double-log
+            return
+    _last_event["timestamp"] = now_mono
+    _last_event["direction"] = direction or _last_event["direction"]
 
     p = Path(report_path)
     if p.suffix == "" or p.is_dir():

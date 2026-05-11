@@ -1,8 +1,33 @@
+# Python
 .venv/
 venv/
 __pycache__/
 *.py[cod]
 .Python
+*.egg-info/
+.pytest_cache/
+.coverage
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Generated runtime data — do NOT publish a user's metrics
+history/regular/
+history/spikes/
+history/*.log
 history/*.csv
 history/*.png
 history/spike_reports.md
+
+# User-specific config (publish config.example.json instead)
+config.json
+
+# Windows shortcuts and OS junk
+*.lnk
+Thumbs.db
+desktop.ini
+
+# Plan / scratch files (kept locally for ongoing work)
+JANITOR_PLAN.md

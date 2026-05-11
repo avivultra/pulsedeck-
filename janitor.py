@@ -94,6 +94,9 @@ class JanitorScanner:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._self_pid = os.getpid()
+        # Cache: ppid -> resolved parent name. Avoids one psutil.Process(ppid)
+        # call per conhost when many share the same parent.
+        self._parent_name_cache: dict[int, str] = {}
 
     # ---- Lifecycle ----
 
@@ -144,13 +147,16 @@ class JanitorScanner:
                 if ppid <= 0 or ppid == self._self_pid:
                     continue
 
-                # Resolve parent name (cheap) — fall back to "unknown" if dead
-                parent_name = ""
-                try:
-                    parent = psutil.Process(ppid)
-                    parent_name = (parent.name() or "").strip().lower()
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    continue
+                # Resolve parent name via cache (saves one syscall per
+                # conhost when many share the same parent).
+                parent_name = self._parent_name_cache.get(ppid)
+                if parent_name is None:
+                    try:
+                        parent = psutil.Process(ppid)
+                        parent_name = (parent.name() or "").strip().lower()
+                    except (psutil.NoSuchProcess, psutil.AccessDenied):
+                        continue
+                    self._parent_name_cache[ppid] = parent_name
 
                 if parent_name not in self._suspicious:
                     continue
@@ -182,6 +188,18 @@ class JanitorScanner:
                     total_rss_bytes=b["rss_total"],
                     scanned_at=now,
                 ))
+
+        # GC parent-name cache: drop entries for PPIDs that no longer exist
+        if self._parent_name_cache:
+            alive_ppids = set(buckets.keys())
+            stale = [p for p in self._parent_name_cache if p not in alive_ppids]
+            # Verify each stale entry is actually dead before evicting — a
+            # parent with zero conhost children today might still be alive.
+            for p in stale:
+                try:
+                    psutil.Process(p)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    self._parent_name_cache.pop(p, None)
         # Sort by count descending — biggest zombie clusters first
         groups.sort(key=lambda g: g.count, reverse=True)
         return groups
