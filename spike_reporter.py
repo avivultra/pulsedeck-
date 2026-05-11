@@ -11,8 +11,14 @@ import psutil
 
 from monitor import Snapshot
 
-RAM_JUMP_PCT = 6.0
-CPU_JUMP_PCT = 12.0
+# A spike is only reported when the machine is *entering* a load condition.
+# A drop in CPU/RAM is good news, not an alert — we no longer fire on it.
+RAM_JUMP_PCT = 6.0       # min positive RAM jump
+CPU_JUMP_PCT = 12.0      # min positive CPU jump
+# Plus, the *post-jump* value must be in a meaningful zone:
+CPU_JUMP_FLOOR = 60.0    # only alert if curr CPU >= 60% after the jump
+RAM_JUMP_FLOOR = 80.0    # only alert if curr RAM >= 80% after the jump
+# Sustained-high thresholds — alert even without a jump
 CPU_HIGH_ABS = 88.0
 RAM_HIGH_ABS = 92.0
 
@@ -70,21 +76,37 @@ def detect_spike(prev: Snapshot, curr: Snapshot) -> tuple[bool, str, str]:
 
 
 def _should_report(prev: Snapshot, curr: Snapshot) -> tuple[bool, str]:
+    """Only report when the machine is entering a load condition.
+
+    Rules (all gated by a floor on the *current* value so we don't fire on
+    benign fluctuations from 5% → 20%):
+      - CPU jumped up by ≥ CPU_JUMP_PCT AND curr.cpu_percent ≥ CPU_JUMP_FLOOR
+      - RAM jumped up by ≥ RAM_JUMP_PCT AND curr.ram_percent ≥ RAM_JUMP_FLOOR
+      - Sustained CPU ≥ CPU_HIGH_ABS (regardless of jump)
+      - Sustained RAM ≥ RAM_HIGH_ABS with at least a small uptick
+
+    Drops in CPU/RAM are NOT alerts — load decreasing is good news.
+    """
     d_ram = curr.ram_percent - prev.ram_percent
     d_cpu = curr.cpu_percent - prev.cpu_percent
     reasons: list[str] = []
-    if d_ram >= RAM_JUMP_PCT:
-        reasons.append(f"RAM עלה ב־{d_ram:+.1f}% (מ־{prev.ram_percent:.1f}% ל־{curr.ram_percent:.1f}%)")
-    if d_ram <= -RAM_JUMP_PCT:
-        reasons.append(f"RAM ירד ב־{d_ram:+.1f}% (מ־{prev.ram_percent:.1f}% ל־{curr.ram_percent:.1f}%)")
-    if d_cpu >= CPU_JUMP_PCT:
-        reasons.append(f"CPU עלה ב־{d_cpu:+.1f}% (מ־{prev.cpu_percent:.1f}% ל־{curr.cpu_percent:.1f}%)")
-    if d_cpu <= -CPU_JUMP_PCT:
-        reasons.append(f"CPU ירד ב־{d_cpu:+.1f}% (מ־{prev.cpu_percent:.1f}% ל־{curr.cpu_percent:.1f}%)")
+
+    # Upward jumps — only when the post-jump value is in the "concerning" zone
+    if d_cpu >= CPU_JUMP_PCT and curr.cpu_percent >= CPU_JUMP_FLOOR:
+        reasons.append(
+            f"CPU עלה ב־{d_cpu:+.1f}% (מ־{prev.cpu_percent:.1f}% ל־{curr.cpu_percent:.1f}%)"
+        )
+    if d_ram >= RAM_JUMP_PCT and curr.ram_percent >= RAM_JUMP_FLOOR:
+        reasons.append(
+            f"RAM עלה ב־{d_ram:+.1f}% (מ־{prev.ram_percent:.1f}% ל־{curr.ram_percent:.1f}%)"
+        )
+
+    # Sustained-high conditions (no jump required, the machine is hot)
     if curr.cpu_percent >= CPU_HIGH_ABS:
         reasons.append(f"CPU גבוה במיוחד: {curr.cpu_percent:.1f}%")
     if curr.ram_percent >= RAM_HIGH_ABS and d_ram >= 2.0:
         reasons.append(f"RAM גבוה: {curr.ram_percent:.1f}%")
+
     if not reasons:
         return False, ""
     return True, " · ".join(reasons)

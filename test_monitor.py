@@ -308,9 +308,38 @@ class TestSpikeDetect(unittest.TestCase):
                             swap_percent=None, uptime_sec=0,
                             battery_percent=None, battery_plugged=None,
                             cpu_logical=8, temp_celsius=None)
-        is_spike, reason, trigger = detect_spike(snap(20, 50), snap(60, 51))
+        # Jump 20→75: ends well above the 60% floor → SHOULD fire
+        is_spike, reason, trigger = detect_spike(snap(20, 50), snap(75, 51))
         self.assertTrue(is_spike)
         self.assertEqual(trigger, "cpu")
+
+    def test_no_spike_when_load_dropping(self) -> None:
+        """Load *decreasing* is good news, never an alert."""
+        from spike_reporter import detect_spike
+        from monitor import Snapshot
+        def snap(cpu, ram):
+            return Snapshot(cpu_percent=cpu, ram_percent=ram, ram_used=0, ram_total=1,
+                            disk_path="/", disk_percent=None, disk_used=None, disk_total=None,
+                            swap_percent=None, uptime_sec=0,
+                            battery_percent=None, battery_plugged=None,
+                            cpu_logical=8, temp_celsius=None)
+        # 80→30 is a 50pp drop — used to fire, now must NOT
+        is_spike, _, _ = detect_spike(snap(80, 50), snap(30, 50))
+        self.assertFalse(is_spike)
+
+    def test_no_spike_on_jump_ending_below_floor(self) -> None:
+        """Jump from low to low — e.g. 5%→25% — is not a concerning event."""
+        from spike_reporter import detect_spike
+        from monitor import Snapshot
+        def snap(cpu, ram):
+            return Snapshot(cpu_percent=cpu, ram_percent=ram, ram_used=0, ram_total=1,
+                            disk_path="/", disk_percent=None, disk_used=None, disk_total=None,
+                            swap_percent=None, uptime_sec=0,
+                            battery_percent=None, battery_plugged=None,
+                            cpu_logical=8, temp_celsius=None)
+        # 5%→30%: +25pp jump but final 30% is benign → NO spike
+        is_spike, _, _ = detect_spike(snap(5, 50), snap(30, 50))
+        self.assertFalse(is_spike)
 
 
 class TestAlertFormatters(unittest.TestCase):
