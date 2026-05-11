@@ -540,5 +540,118 @@ class TestPerformanceAndUx(unittest.TestCase):
             self.assertEqual(heading_count, 1)
 
 
+class TestProbeChains(unittest.TestCase):
+    """Verify the GPU/CPU probe chains fall through cleanly."""
+
+    def test_gpu_chain_returns_first_successful_probe(self) -> None:
+        import gpu_probes
+        from gpu_probes import GPUReading
+
+        class FailProbe(gpu_probes.GPUProbe):
+            name = "fail"
+            def is_available(self): return True
+            def read(self): return None
+
+        class SucceedProbe(gpu_probes.GPUProbe):
+            name = "succeed"
+            def is_available(self): return True
+            def read(self):
+                return GPUReading(temp_celsius=55.0, mem_used_mib=100,
+                                  mem_total_mib=8192, source="succeed")
+
+        class ShouldNeverRunProbe(gpu_probes.GPUProbe):
+            name = "never"
+            def is_available(self):
+                raise AssertionError("should not be reached")
+            def read(self):
+                raise AssertionError("should not be reached")
+
+        original = gpu_probes.GPU_PROBES
+        try:
+            gpu_probes.GPU_PROBES = [FailProbe(), SucceedProbe(), ShouldNeverRunProbe()]
+            result = gpu_probes.read_gpu()
+            self.assertIsNotNone(result)
+            self.assertEqual(result.source, "succeed")
+            self.assertEqual(result.temp_celsius, 55.0)
+        finally:
+            gpu_probes.GPU_PROBES = original
+
+    def test_gpu_chain_skips_unavailable_probes(self) -> None:
+        import gpu_probes
+
+        class UnavailableProbe(gpu_probes.GPUProbe):
+            name = "unavail"
+            def is_available(self): return False
+            def read(self):
+                raise AssertionError("read() called on unavailable probe")
+
+        original = gpu_probes.GPU_PROBES
+        try:
+            gpu_probes.GPU_PROBES = [UnavailableProbe()]
+            self.assertIsNone(gpu_probes.read_gpu())
+        finally:
+            gpu_probes.GPU_PROBES = original
+
+    def test_gpu_chain_returns_none_when_all_fail(self) -> None:
+        import gpu_probes
+
+        class AlwaysFailProbe(gpu_probes.GPUProbe):
+            name = "always-fail"
+            def is_available(self): return True
+            def read(self): return None
+
+        original = gpu_probes.GPU_PROBES
+        try:
+            gpu_probes.GPU_PROBES = [AlwaysFailProbe(), AlwaysFailProbe()]
+            self.assertIsNone(gpu_probes.read_gpu())
+        finally:
+            gpu_probes.GPU_PROBES = original
+
+    def test_gpu_chain_isolates_probe_exceptions(self) -> None:
+        """A probe that raises must not break the chain."""
+        import gpu_probes
+        from gpu_probes import GPUReading
+
+        class RaiseProbe(gpu_probes.GPUProbe):
+            name = "raise"
+            def is_available(self): return True
+            def read(self): raise RuntimeError("simulated")
+
+        class GoodProbe(gpu_probes.GPUProbe):
+            name = "good"
+            def is_available(self): return True
+            def read(self):
+                return GPUReading(50.0, 200, 4096, "good")
+
+        original = gpu_probes.GPU_PROBES
+        try:
+            gpu_probes.GPU_PROBES = [RaiseProbe(), GoodProbe()]
+            result = gpu_probes.read_gpu()
+            self.assertIsNotNone(result)
+            self.assertEqual(result.source, "good")
+        finally:
+            gpu_probes.GPU_PROBES = original
+
+    def test_cpu_chain_returns_first_value(self) -> None:
+        import cpu_probes
+
+        class NoneProbe(cpu_probes.CPUTempProbe):
+            name = "none"
+            def is_available(self): return True
+            def read(self): return None
+
+        class FortyTwoProbe(cpu_probes.CPUTempProbe):
+            name = "42"
+            def is_available(self): return True
+            def read(self): return 42.0
+
+        original = cpu_probes.CPU_PROBES
+        try:
+            cpu_probes.CPU_PROBES = [NoneProbe(), FortyTwoProbe()]
+            self.assertEqual(cpu_probes.read_cpu_temperature_celsius(), 42.0)
+        finally:
+            cpu_probes.CPU_PROBES = original
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -7,12 +7,15 @@ Best-effort CPU / system temperature in Celsius.
 
 from __future__ import annotations
 
+import logging
 import os
 import shutil
 import subprocess
 import time
 
 import psutil
+
+log = logging.getLogger(__name__)
 
 _CACHE_TTL_SEC = 8.0
 _cache_value: float | None = None
@@ -95,135 +98,74 @@ def _from_windows_wmi() -> float | None:
 
 
 def read_primary_temp_celsius() -> float | None:
-    """Representative temperature for logging / UI, or None if unknown."""
+    """Representative CPU temperature for logging / UI, or None if unknown.
+
+    Routes through the cpu_probes chain (psutil → Windows WMI → Linux
+    sysfs → macOS). Result is cached for `_CACHE_TTL_SEC` to avoid hammering
+    sensors / spawning powershell every tick.
+    """
     global _cache_value, _last_read_mono
     now = time.monotonic()
     if _last_read_mono is not None and (now - _last_read_mono) < _CACHE_TTL_SEC:
         return _cache_value
 
-    t = _from_psutil()
-    if t is None and os.name == "nt":
-        t = _from_windows_wmi()
+    try:
+        from cpu_probes import read_cpu_temperature_celsius
+        t = read_cpu_temperature_celsius()
+    except Exception:
+        log.exception("CPU temperature probe chain failed; falling back to None")
+        t = None
     _cache_value = t
     _last_read_mono = now
     return t
 
 
-_GPU_CACHE_VAL: float | None = None
-_GPU_CACHE_MONO: float | None = None
-_GPU_CACHE_TTL = 15.0
-
-_GPU_MEM_CACHE: tuple[int, int] | None = None
-_GPU_MEM_MONO: float | None = None
-_GPU_MEM_TTL = 5.0
+# GPU readings — shared cache across temp + memory so the probe chain runs
+# at most once every _GPU_CACHE_TTL seconds even if both functions are called.
+_GPU_READING_CACHE = None       # gpu_probes.GPUReading | None
+_GPU_READING_MONO: float | None = None
+_GPU_CACHE_TTL = 5.0
 
 
-def read_gpu_memory_mib() -> tuple[int, int] | None:
-    """NVIDIA VRAM (used, total) in MiB via nvidia-smi; None if unavailable."""
-    global _GPU_MEM_CACHE, _GPU_MEM_MONO
+def _get_cached_gpu_reading():
+    """Return a recent GPUReading from the probe chain, or None.
+
+    The chain is `gpu_probes.GPU_PROBES` — NVIDIA first, then AMD, Intel,
+    then Linux sysfs. Each probe is cheap to *skip* (single `which()`),
+    so machines with NVIDIA keep their original behaviour: NvidiaSmiProbe
+    succeeds and the rest are never tried.
+    """
+    global _GPU_READING_CACHE, _GPU_READING_MONO
     now = time.monotonic()
-    if _GPU_MEM_MONO is not None and (now - _GPU_MEM_MONO) < _GPU_MEM_TTL:
-        return _GPU_MEM_CACHE
-
-    exe = shutil.which("nvidia-smi")
-    if not exe:
-        _GPU_MEM_CACHE = None
-        _GPU_MEM_MONO = now
-        return None
-
-    creationflags = 0
-    if hasattr(subprocess, "CREATE_NO_WINDOW"):
-        creationflags = subprocess.CREATE_NO_WINDOW
+    if _GPU_READING_MONO is not None and (now - _GPU_READING_MONO) < _GPU_CACHE_TTL:
+        return _GPU_READING_CACHE
     try:
-        proc = subprocess.run(
-            [exe, "--query-gpu=memory.used,memory.total",
-             "--format=csv,noheader,nounits"],
-            capture_output=True, text=True, timeout=3,
-            creationflags=creationflags,
-        )
-    except (OSError, subprocess.TimeoutExpired, FileNotFoundError):
-        _GPU_MEM_CACHE = None
-        _GPU_MEM_MONO = now
-        return None
-    if proc.returncode != 0:
-        _GPU_MEM_CACHE = None
-        _GPU_MEM_MONO = now
-        return None
-
-    line = (proc.stdout or "").strip().splitlines()
-    if not line:
-        _GPU_MEM_CACHE = None
-        _GPU_MEM_MONO = now
-        return None
-    try:
-        parts = [p.strip() for p in line[0].split(",")]
-        used = int(float(parts[0]))
-        total = int(float(parts[1]))
-    except (ValueError, IndexError):
-        _GPU_MEM_CACHE = None
-        _GPU_MEM_MONO = now
-        return None
-    if total <= 0:
-        _GPU_MEM_CACHE = None
-        _GPU_MEM_MONO = now
-        return None
-
-    _GPU_MEM_CACHE = (used, total)
-    _GPU_MEM_MONO = now
-    return _GPU_MEM_CACHE
+        from gpu_probes import read_gpu
+        _GPU_READING_CACHE = read_gpu()
+    except Exception:
+        log.exception("GPU probe chain raised; caching None")
+        _GPU_READING_CACHE = None
+    _GPU_READING_MONO = now
+    return _GPU_READING_CACHE
 
 
 def read_gpu_temp_celsius() -> float | None:
-    """NVIDIA GPU die temperature via nvidia-smi when installed; else None."""
-    global _GPU_CACHE_VAL, _GPU_CACHE_MONO
-    now = time.monotonic()
-    if _GPU_CACHE_MONO is not None and (now - _GPU_CACHE_MONO) < _GPU_CACHE_TTL:
-        return _GPU_CACHE_VAL
+    """GPU die temperature, vendor-agnostic. Returns None if no probe succeeds.
 
-    exe = shutil.which("nvidia-smi")
-    if not exe:
-        _GPU_CACHE_VAL = None
-        _GPU_CACHE_MONO = now
-        return None
+    Tries NVIDIA → AMD → Intel → Linux sysfs in order. Caches the underlying
+    reading for 5 seconds.
+    """
+    reading = _get_cached_gpu_reading()
+    return reading.temp_celsius if reading is not None else None
 
-    creationflags = 0
-    if hasattr(subprocess, "CREATE_NO_WINDOW"):
-        creationflags = subprocess.CREATE_NO_WINDOW
-    try:
-        proc = subprocess.run(
-            [
-                exe,
-                "--query-gpu=temperature.gpu",
-                "--format=csv,noheader,nounits",
-            ],
-            capture_output=True,
-            text=True,
-            timeout=3,
-            creationflags=creationflags,
-        )
-    except (OSError, subprocess.TimeoutExpired, FileNotFoundError):
-        _GPU_CACHE_VAL = None
-        _GPU_CACHE_MONO = now
+
+def read_gpu_memory_mib() -> tuple[int, int] | None:
+    """GPU VRAM (used, total) in MiB, vendor-agnostic. None if not available.
+
+    Returns None if the active probe didn't report memory (e.g. the Linux
+    sysfs fallback only provides temperature).
+    """
+    reading = _get_cached_gpu_reading()
+    if reading is None or reading.mem_total_mib is None:
         return None
-    if proc.returncode != 0:
-        _GPU_CACHE_VAL = None
-        _GPU_CACHE_MONO = now
-        return None
-    line = (proc.stdout or "").strip().splitlines()
-    if not line:
-        _GPU_CACHE_VAL = None
-        _GPU_CACHE_MONO = now
-        return None
-    try:
-        val = float(line[0].strip().replace(",", "."))
-    except ValueError:
-        _GPU_CACHE_VAL = None
-        _GPU_CACHE_MONO = now
-        return None
-    if val < -20 or val > 120:
-        _GPU_CACHE_VAL = None
-        _GPU_CACHE_MONO = now
-        return None
-    _GPU_CACHE_VAL = val
-    _GPU_CACHE_MONO = now
-    return val
+    return (reading.mem_used_mib or 0, reading.mem_total_mib)
