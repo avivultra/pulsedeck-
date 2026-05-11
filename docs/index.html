@@ -437,12 +437,51 @@ dependency validation, alert formatters, protected-process guards, spike
 detection, cooldown gating, mute-list suppression, snooze, oscillation
 dedup, janitor scanning rules, parent-name caching.</p>
 
-<h2>Notes &amp; limitations</h2>
+<h2>Hardware &amp; OS compatibility</h2>
+
+<p>PulseDeck is designed to <strong>run on any machine</strong> — Intel, AMD,
+ARM, Apple Silicon, etc. Core monitoring works everywhere via
+<code>psutil</code>. Sensor-level metrics (GPU, CPU temperature) are read with
+<strong>graceful fallback</strong>: if the hardware doesn't expose a sensor,
+the value simply shows <code>—</code> and the app keeps running.</p>
+
+<h3>Metrics — what works on which machine</h3>
+
+<table>
+  <thead><tr><th>Metric</th><th>Where it works</th><th>If unavailable</th></tr></thead>
+  <tbody>
+    <tr><td>CPU %, core count</td><td><strong>Every machine</strong> (Intel/AMD/ARM/Apple Silicon)</td><td>—</td></tr>
+    <tr><td>RAM, swap</td><td><strong>Every machine</strong></td><td>—</td></tr>
+    <tr><td>Disk usage</td><td><strong>Every machine</strong></td><td>—</td></tr>
+    <tr><td>Network throughput</td><td><strong>Every machine</strong></td><td>—</td></tr>
+    <tr><td>Battery + AC</td><td>Devices with a battery</td><td>Hidden in UI</td></tr>
+    <tr><td>Top processes</td><td><strong>Every machine</strong></td><td>—</td></tr>
+    <tr><td><strong>CPU temperature</strong></td><td>Machines whose BIOS exposes thermal sensors (most laptops, some desktops). Windows uses WMI fallback.</td><td>Shows <code>—</code></td></tr>
+    <tr><td><strong>GPU temperature, VRAM</strong></td><td><strong>NVIDIA only</strong> (requires <code>nvidia-smi</code>). AMD / Intel Arc / integrated GPUs not supported yet.</td><td>Shows <code>—</code></td></tr>
+    <tr><td>Spike alerts, kill, history</td><td><strong>Every machine</strong></td><td>—</td></tr>
+  </tbody>
+</table>
+
+<h3>OS-specific features</h3>
+
+<table>
+  <thead><tr><th>Feature</th><th>Windows</th><th>Linux</th><th>macOS</th></tr></thead>
+  <tbody>
+    <tr><td>Core monitoring</td><td>✅</td><td>✅</td><td>✅</td></tr>
+    <tr><td>Dock (drag/pin/resize)</td><td>✅</td><td>✅</td><td>✅</td></tr>
+    <tr><td>System tray</td><td>✅</td><td>✅</td><td>✅</td></tr>
+    <tr><td>Live chart</td><td>✅</td><td>✅</td><td>✅</td></tr>
+    <tr><td>Spike toasts</td><td>✅</td><td>✅</td><td>✅</td></tr>
+    <tr><td><code>conhost.exe</code> Janitor</td><td>✅</td><td>n/a</td><td>n/a</td></tr>
+    <tr><td>Desktop shortcut installer</td><td>✅ (<code>.lnk</code>)</td><td>✅ (<code>.desktop</code>)</td><td>Manual hint</td></tr>
+  </tbody>
+</table>
+
+<h3>Other notes</h3>
 
 <ul>
   <li><strong>UI is currently Hebrew</strong> (developer is a Hebrew speaker). Strings are central enough to localise — PRs welcome.</li>
-  <li><strong>GPU temperature/VRAM</strong>: NVIDIA only (via <code>nvidia-smi</code>). AMD/Intel Arc support is not implemented.</li>
-  <li><strong>Linux/macOS</strong>: most features work, but the dock and shortcut installer are Windows-tuned.</li>
+  <li><strong><code>Start-Monitor.bat</code> / <code>.vbs</code></strong> assume Python is in standard <code>%LocalAppData%\Programs\Python\</code> locations. Adjust if installed elsewhere.</li>
 </ul>
 
 <hr>
@@ -646,12 +685,50 @@ snooze (15 / 30 / 60 דקות).</p>
 gating של cooldown, השתקה של mute-list, snooze, dedup של oscillation, כללי
 סריקה של janitor, מטמון של parent-name.</p>
 
-<h2>הערות ומגבלות</h2>
+<h2>תאימות חומרה ומערכת הפעלה</h2>
+
+<p>PulseDeck תוכנן <strong>לרוץ על כל מחשב</strong> — Intel, AMD, ARM, Apple
+Silicon וכו׳. הניטור המרכזי עובד בכל מקום דרך <code>psutil</code>. מטריקות
+ברמת חיישן (GPU, טמפ׳ CPU) נקראות עם <strong>נפילה רכה</strong>: אם החומרה
+לא חושפת חיישן, הערך פשוט מציג <code>—</code> והתוכנה ממשיכה לרוץ.</p>
+
+<h3>מטריקות — מה עובד על איזה מחשב</h3>
+
+<table>
+  <thead><tr><th>מטריקה</th><th>איפה עובד</th><th>אם לא זמין</th></tr></thead>
+  <tbody>
+    <tr><td>CPU % וליבות</td><td><strong>כל מחשב</strong> (Intel / AMD / ARM / Apple Silicon)</td><td>—</td></tr>
+    <tr><td>RAM, swap</td><td><strong>כל מחשב</strong></td><td>—</td></tr>
+    <tr><td>שימוש בדיסק</td><td><strong>כל מחשב</strong></td><td>—</td></tr>
+    <tr><td>תעבורת רשת</td><td><strong>כל מחשב</strong></td><td>—</td></tr>
+    <tr><td>סוללה + AC</td><td>מכשירים עם סוללה</td><td>מוסתר ב-UI</td></tr>
+    <tr><td>תהליכים מובילים</td><td><strong>כל מחשב</strong></td><td>—</td></tr>
+    <tr><td><strong>טמפ׳ CPU</strong></td><td>מחשבים שה-BIOS חושף בהם חיישנים תרמיים (רוב הלפטופים, חלק מה-desktops). ב-Windows משתמש ב-WMI כ-fallback.</td><td>מציג <code>—</code></td></tr>
+    <tr><td><strong>טמפ׳ GPU, VRAM</strong></td><td><strong>NVIDIA בלבד</strong> (דורש <code>nvidia-smi</code>). AMD / Intel Arc / כרטיסים משולבים לא נתמכים עדיין.</td><td>מציג <code>—</code></td></tr>
+    <tr><td>התראות, הרג, היסטוריה</td><td><strong>כל מחשב</strong></td><td>—</td></tr>
+  </tbody>
+</table>
+
+<h3>פיצ׳רים תלויי מערכת הפעלה</h3>
+
+<table>
+  <thead><tr><th>פיצ׳ר</th><th>Windows</th><th>Linux</th><th>macOS</th></tr></thead>
+  <tbody>
+    <tr><td>ניטור מרכזי</td><td>✅</td><td>✅</td><td>✅</td></tr>
+    <tr><td>דוק (גרירה / נעיצה / גודל)</td><td>✅</td><td>✅</td><td>✅</td></tr>
+    <tr><td>System tray</td><td>✅</td><td>✅</td><td>✅</td></tr>
+    <tr><td>גרף חי</td><td>✅</td><td>✅</td><td>✅</td></tr>
+    <tr><td>Toasts לעומסים</td><td>✅</td><td>✅</td><td>✅</td></tr>
+    <tr><td>Janitor של <code>conhost.exe</code></td><td>✅</td><td>n/a</td><td>n/a</td></tr>
+    <tr><td>התקנת קיצור בשולחן עבודה</td><td>✅ (<code>.lnk</code>)</td><td>✅ (<code>.desktop</code>)</td><td>הוראות ידניות</td></tr>
+  </tbody>
+</table>
+
+<h3>הערות נוספות</h3>
 
 <ul>
   <li><strong>ה-UI כרגע בעברית</strong> (המפתח דובר עברית). המחרוזות מרוכזות מספיק כדי לתרגם — PRs יתקבלו בברכה.</li>
-  <li><strong>טמפרטורת GPU / VRAM</strong>: רק NVIDIA (דרך <code>nvidia-smi</code>). תמיכת AMD / Intel Arc לא מיושמת.</li>
-  <li><strong>Linux / macOS</strong>: רוב הפיצ׳רים עובדים, אבל הדוק וה-installer של הקיצור מכוונים ל-Windows.</li>
+  <li><strong><code>Start-Monitor.bat</code> / <code>.vbs</code></strong> מניחים ש-Python נמצא ב-<code>%LocalAppData%\Programs\Python\</code> הסטנדרטי. לשנות אם מותקן במקום אחר.</li>
 </ul>
 
 <hr>

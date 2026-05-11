@@ -204,14 +204,46 @@ janitor scanning rules, parent-name caching.
 
 ---
 
-## Notes & limitations
+## Hardware & OS compatibility
+
+PulseDeck is designed to **run on any machine** — Intel, AMD, ARM, Apple
+Silicon, etc. Core monitoring works everywhere via `psutil`. Sensor-level
+metrics (GPU, CPU temperature) are read with **graceful fallback**: if the
+hardware doesn't expose a sensor, the value simply shows `—` and the app
+keeps running.
+
+### Metrics — what works on which machine
+
+| Metric | Where it works | If unavailable |
+|---|---|---|
+| CPU %, core count | **Every machine** (Intel/AMD/ARM/Apple Silicon) | — |
+| RAM, swap | **Every machine** | — |
+| Disk usage (any drive) | **Every machine** | — |
+| Network throughput | **Every machine** | — |
+| Battery + AC status | Devices with a battery (laptops, tablets) | Hidden in UI |
+| Uptime | **Every machine** | — |
+| Top processes (CPU/RAM) | **Every machine** | — |
+| **CPU temperature** | Machines where the BIOS/motherboard exposes thermal sensors (most laptops, some desktops). Windows uses WMI fallback. | Shows `—` |
+| **GPU temperature, VRAM** | **NVIDIA only** (requires `nvidia-smi`). AMD / Intel Arc / integrated GPUs not supported yet. | Shows `—` |
+| Spike alerts, kill, history | **Every machine** | — |
+
+### OS-specific features
+
+| Feature | Windows | Linux | macOS |
+|---|---|---|---|
+| Core monitoring | ✅ | ✅ | ✅ |
+| Dock (drag/pin/resize) | ✅ (Win32 taskbar geometry) | ✅ (sensible defaults) | ✅ (sensible defaults) |
+| System tray | ✅ | ✅ | ✅ |
+| Live chart | ✅ | ✅ | ✅ |
+| Spike toasts | ✅ | ✅ | ✅ |
+| **`conhost.exe` Janitor** | ✅ | n/a (no conhost) | n/a |
+| **Desktop shortcut installer** | ✅ (`.lnk` via PowerShell) | ✅ (`.desktop` file) | Manual hint printed |
+| `Start-Monitor-Hidden.vbs` | ✅ | n/a (use `python monitor.py`) | n/a |
+
+### Other notes
 
 - **UI is currently Hebrew** (developer is a Hebrew speaker). Strings are
   centralised enough to localise — PRs welcome.
-- **GPU temperature/VRAM**: NVIDIA only (via `nvidia-smi`). AMD/Intel Arc
-  support is not implemented.
-- **Linux/macOS**: most features work, but the dock is Windows-tuned. Tray
-  layouting and taskbar geometry use Win32 APIs where available.
 - **`Start-Monitor.bat` / `.vbs`** assume Python is in standard
   `%LocalAppData%\Programs\Python\` locations. Adjust if installed elsewhere.
 
