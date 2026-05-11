@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" dir="ltr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -26,7 +26,38 @@
     background: var(--bg); color: var(--fg);
     line-height: 1.65;
   }
+  html[lang="he"] body {
+    font-family: "Segoe UI", "Heebo", system-ui, sans-serif;
+  }
   .wrap { max-width: 980px; margin: 0 auto; padding: 60px 24px 100px; }
+
+  /* Language switcher — top-right fixed pill */
+  .lang-switch {
+    position: fixed; top: 18px; right: 18px; z-index: 50;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 100px; padding: 4px;
+    display: flex; gap: 0;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+  }
+  html[dir="rtl"] .lang-switch { right: auto; left: 18px; }
+  .lang-switch button {
+    background: transparent; border: 0;
+    color: var(--dim); cursor: pointer;
+    padding: 6px 14px; border-radius: 100px;
+    font: 600 0.85em "Inter", "Segoe UI", system-ui, sans-serif;
+    transition: color 0.15s, background 0.15s;
+  }
+  .lang-switch button:hover { color: var(--fg); }
+  .lang-switch button.active {
+    background: var(--cpu); color: white;
+  }
+
+  /* Language sections — show one, hide the other */
+  [data-lang] { display: none; }
+  html[lang="en"] [data-lang="en"] { display: block; }
+  html[lang="he"] [data-lang="he"] { display: block; }
+
   header {
     text-align: center;
     padding: 40px 0 56px;
@@ -83,6 +114,7 @@
     border-radius: 4px; font-size: 0.9em;
     color: var(--fg);
     font-family: "Cascadia Mono", "Consolas", monospace;
+    direction: ltr; display: inline-block;
   }
   pre {
     background: var(--panel); padding: 16px 20px;
@@ -90,6 +122,7 @@
     border: 1px solid var(--border);
     font-size: 0.9em;
     line-height: 1.55;
+    direction: ltr; text-align: left;
   }
   pre code { background: none; padding: 0; color: var(--fg); }
 
@@ -116,6 +149,7 @@
     font-size: 0.95em;
   }
   th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  html[dir="rtl"] th, html[dir="rtl"] td { text-align: right; }
   th { color: var(--cpu); font-weight: 600; }
   tr:hover td { background: rgba(255,255,255,0.02); }
 
@@ -150,8 +184,16 @@
 </style>
 </head>
 <body>
-<div class="wrap">
 
+<!-- Language switcher (always visible) -->
+<nav class="lang-switch" role="tablist" aria-label="Language">
+  <button id="btn-en" type="button" role="tab" aria-controls="content" onclick="setLang('en')">EN</button>
+  <button id="btn-he" type="button" role="tab" aria-controls="content" onclick="setLang('he')">עברית</button>
+</nav>
+
+<div class="wrap" id="content">
+
+<!-- Shared header (logo + branded title work in both languages) -->
 <header>
   <div class="logo">
     <svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
@@ -178,11 +220,18 @@
     </svg>
   </div>
   <h1><span class="gradient-text">PulseDeck</span></h1>
-  <p class="tagline">
+
+  <p class="tagline" data-lang="en">
     A lightweight Python desktop monitor that watches your CPU, RAM, disk,
     GPU, and processes in real time — detects load spikes, surfaces the
     culprits, and lets you kill them safely. Without weighing your machine down.
   </p>
+  <p class="tagline" data-lang="he">
+    מוניטור שולחני קליל ב-Python שעוקב אחר ה-CPU, RAM, דיסק, GPU
+    והתהליכים שלך בזמן אמת — מזהה עומסים, חושף את הגורמים האשמים, ומאפשר
+    לסגור אותם בבטחה. בלי להכביד על המחשב.
+  </p>
+
   <div class="badges">
     <span class="badge cpu">Python 3.10+</span>
     <span class="badge ram">Windows · Linux · macOS</span>
@@ -191,6 +240,9 @@
     <span class="badge">&lt; 1% CPU</span>
   </div>
 </header>
+
+<!-- ================== ENGLISH CONTENT ================== -->
+<div data-lang="en">
 
 <h2>Why it exists</h2>
 <p>
@@ -385,7 +437,7 @@ dependency validation, alert formatters, protected-process guards, spike
 detection, cooldown gating, mute-list suppression, snooze, oscillation
 dedup, janitor scanning rules, parent-name caching.</p>
 
-<h2>Notes & limitations</h2>
+<h2>Notes &amp; limitations</h2>
 
 <ul>
   <li><strong>UI is currently Hebrew</strong> (developer is a Hebrew speaker). Strings are central enough to localise — PRs welcome.</li>
@@ -396,11 +448,248 @@ dedup, janitor scanning rules, parent-name caching.</p>
 <hr>
 
 <footer>
-  <p>
-    Built with care · MIT Licensed · <a href="https://github.com/">View on GitHub</a>
-  </p>
+  <p>Built with care · MIT Licensed · <a href="https://github.com/">View on GitHub</a></p>
 </footer>
 
 </div>
+<!-- ================== END ENGLISH ================== -->
+
+
+<!-- ================== HEBREW CONTENT ================== -->
+<div data-lang="he">
+
+<h2>למה זה קיים</h2>
+<p>
+  ה-Task Manager של Windows מצוין כשאתה כבר בצרות. PulseDeck נועד
+  <strong>ל-30 השניות שלפני</strong> — כשהמחשב מתחיל לגמגם ואתה רוצה לדעת,
+  בלי ללחוץ, מה בדיוק אוכל את ה-CPU כרגע.
+</p>
+
+<div class="callout">
+  <strong>שלוש הבטחות.</strong>
+  <ol style="margin: 8px 0 0;">
+    <li><strong>נתונים בזמן אמת</strong> — דגימה בכל שנייה, רישום ל-CSV לניתוח.</li>
+    <li><strong>התראות עומס</strong> — toast עדין בפינה הימנית-תחתונה כשהעומס קופץ. לחיצה — והנה רשימת התהליכים האחראיים.</li>
+    <li><strong>טביעת רגל נמוכה</strong> — דגימה אדפטיבית, קריאות מערכת מקובצות, קריאות קובץ אינקרמנטליות. המוניטור אף פעם לא הופך לבעיה שהוא מנטר.</li>
+  </ol>
+</div>
+
+<h2>פיצ׳רים</h2>
+
+<div class="grid">
+  <div class="card cpu">
+    <h3>📊 ניטור חי</h3>
+    <p>CPU · RAM · דיסק · GPU · VRAM · רשת · טמפרטורה · סוללה · Uptime. הכל נדגם כל שנייה ונכתב ל-CSV.</p>
+  </div>
+  <div class="card ram">
+    <h3>📈 גרף אינטראקטיבי</h3>
+    <p>גרף חי מבוסס matplotlib עם בורר חלון זמן (5 דק׳ / 15 דק׳ / שעה / 6 שעות / 24 שעות / הכל). pan, zoom, שמירה כ-PNG.</p>
+  </div>
+  <div class="card red">
+    <h3>🔔 התראות עומס</h3>
+    <p>Toast בפינה הימנית-תחתונה, נסגר אוטומטית אחרי 8 שניות. לחיצה מציגה Top 5 CPU + Top 5 RAM עם אינדיקטורי פעילות.</p>
+  </div>
+  <div class="card green">
+    <h3>✕ הריגה בטוחה</h3>
+    <p>הרג תהליך מתפרע מחלון ההתראה. תמיד שואל אישור. תהליכי מערכת קריטיים (svchost, csrss, ...) מוגנים.</p>
+  </div>
+  <div class="card purple">
+    <h3>🧹 שרת בית לתהליכים</h3>
+    <p>מזהה הצטברות של <code>conhost.exe</code> זומבים מ-CLI של dev. ניקוי בלחיצה אחת, log ביקורת, אף פעם לא אוטומטי.</p>
+  </div>
+  <div class="card">
+    <h3>📁 היסטוריה חכמה</h3>
+    <p>Rotation שבועי של ה-CSV, דוחות Markdown יומיים לאירועי spike, retention ניתן להגדרה (12 שבועות ברירת מחדל).</p>
+  </div>
+  <div class="card">
+    <h3>🎛 שלושה מצבי UI</h3>
+    <p>דוק צף מעל הטאסקבר · אייקון tray · קונסולה. אפשר לשלב. הדוק תומך בגרירה, שינוי גודל, נעיצה.</p>
+  </div>
+  <div class="card">
+    <h3>⚙ הגדרות מתמשכות</h3>
+    <p>העדפות נשמרות ב-<code>config.json</code>. flags ב-CLI עוקפות. <code>--save-config</code> שומר את ההפעלה הנוכחית.</p>
+  </div>
+</div>
+
+<h2>התחלה מהירה</h2>
+
+<pre><code>git clone https://github.com/&lt;your-user&gt;/pulsedeck.git
+cd pulsedeck
+pip install -r requirements.txt
+
+# הרצה עם dock + history + tray
+python monitor.py --dock --history --tray
+
+# התקנת קיצור בשולחן עבודה (Windows .lnk / Linux .desktop)
+python monitor.py --install-shortcut</code></pre>
+
+<p>בהפעלה הראשונה, <code>config.json</code> נוצר עם ברירות מחדל ויושב ליד
+<code>monitor.py</code>. כדי שיעלה בכל הפעלת מחשב ב-Windows — תגרור קיצור
+ל-<code>Start-Monitor-Hidden.vbs</code> לתיקייה <code>shell:startup</code>.</p>
+
+<h2>איך התראות עובדות</h2>
+
+<p>הסמפלר משווה כל snapshot חדש עם הקודם. spike נרשם כאשר:</p>
+
+<ul>
+  <li><strong>CPU עולה ב-12 נקודות אחוז</strong> (או יורד — שני הכיוונים מפעילים).</li>
+  <li><strong>RAM עולה ב-6 נקודות אחוז</strong>.</li>
+  <li><strong>CPU מעל 88%</strong> באופן מתמשך.</li>
+  <li><strong>RAM מעל 92%</strong> עם עלייה של 2 נקודות לפחות.</li>
+</ul>
+
+<p>כאשר מופעל (וה-cooldown של 5 דקות פנוי), toast קטן מחליק לפינה הימנית-תחתונה.
+<strong>קליק שמאלי</strong> פותח את חלון ההתראה המלא — Top 5 CPU ו-Top 5 RAM זה לצד זה,
+עם תגי פעילות (ירוק = פעיל עכשיו, ענבר = פעיל לאחרונה, אפור = ברקע, סגול = מוגן),
+זמן ריצה, וכפתור Kill אדום שטוח. <strong>קליק ימני</strong> על ה-toast — אפשרויות
+snooze (15 / 30 / 60 דקות).</p>
+
+<div class="callout warn">
+  <strong>הריגה היא תמיד ידנית.</strong> גם עם הכפתור "נקה הכל" בפאנל ה-Janitor,
+  כל פעולה עוברת דיאלוג אישור. המוניטור אף פעם לא יסיים תהליך לבדו.
+</div>
+
+<h2>ביצועים — איך זה נשאר קל</h2>
+
+<table>
+  <thead><tr><th>תת-מערכת</th><th>אופטימיזציה</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>סמפלר תהליכים</td>
+      <td><strong>קצב אדפטיבי</strong> — 2 שניות בחלון של 30 שניות אחרי alert; 5 שניות במצב idle. חוזר לקצב המהיר מיד כשמתפוצץ alert חדש.</td>
+    </tr>
+    <tr>
+      <td>גרף חי</td>
+      <td><strong>קריאת CSV אינקרמנטלית</strong> — רק ה-tail שנוסף מאז ה-refresh הקודם נקרא. פי 86 מהיר יותר מקריאה מלאה של קובץ 1.5 MB.</td>
+    </tr>
+    <tr>
+      <td>Janitor</td>
+      <td><strong>מטמון parent-name</strong> — קריאה אחת ל-<code>psutil.Process()</code> לכל PID-הורה ייחודי, לא לכל זומבי.</td>
+    </tr>
+    <tr>
+      <td>דוק</td>
+      <td><strong>פריסה רק בשינוי</strong> — אין re-position בכל tick. אכיפה של topmost רק כל 5 שניות.</td>
+    </tr>
+    <tr>
+      <td>Logging</td>
+      <td>אירועי cooldown-suppressed הורדו מ-INFO ל-DEBUG; spike-oscillation מבוטל בתוך חלון של 30 שניות.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>תצורה</h2>
+
+<p>כל האפשרויות יושבות ב-<code>config.json</code>. tweaks שימושיים:</p>
+
+<pre><code>{
+  "spike": { "cpu_threshold": 12, "ram_threshold": 6, "enabled": true },
+  "alerts": {
+    "cooldown_seconds": 300,
+    "muted_processes": ["chrome.exe"],
+    "sound_enabled": false
+  },
+  "rotation": { "weeks_to_keep": 12 },
+  "janitor": {
+    "conhost_threshold_per_parent": 20,
+    "suspicious_parents": ["claude.exe", "electron.exe", "node.exe"]
+  },
+  "dock": { "pinned": true, "font_scale": 1.0 }
+}</code></pre>
+
+<h2>CLI</h2>
+
+<table>
+  <thead><tr><th>Flag</th><th>ברירת מחדל</th><th>הערות</th></tr></thead>
+  <tbody>
+    <tr><td><code>--dock</code> / <code>--no-dock</code></td><td>מה-config</td><td>פאנל צף</td></tr>
+    <tr><td><code>--tray</code> / <code>--no-tray</code></td><td>מה-config</td><td>אייקון system tray</td></tr>
+    <tr><td><code>--history</code> / <code>--no-history</code></td><td>מה-config</td><td>append ל-CSV</td></tr>
+    <tr><td><code>--alerts</code> / <code>--no-alerts</code></td><td>true</td><td>הצגת toast לעומסים</td></tr>
+    <tr><td><code>--alert-cooldown SEC</code></td><td>300</td><td>מינימום שניות בין toasts</td></tr>
+    <tr><td><code>--disk PATH</code></td><td>דיסק המערכת</td><td>דיסק לניטור (<code>E:\</code>, <code>/mnt/data</code>)</td></tr>
+    <tr><td><code>--once</code></td><td>off</td><td>snapshot יחיד, יציאה</td></tr>
+    <tr><td><code>--log-level LEVEL</code></td><td>WARNING</td><td>DEBUG / INFO / WARNING / ERROR</td></tr>
+    <tr><td><code>--install-shortcut</code></td><td>—</td><td>יצירת קיצור בשולחן עבודה, יציאה</td></tr>
+    <tr><td><code>--save-config</code></td><td>—</td><td>שמירת ה-args הנוכחיים ל-config.json</td></tr>
+  </tbody>
+</table>
+
+<h2>ארכיטקטורה</h2>
+
+<pre><code>monitor.py              entry point
+├── config.py           config.json load/save
+├── dependencies.py     startup checks for psutil / pystray / matplotlib / PIL
+├── metric_history.py   CSV append, weekly rotation, archive pruning
+├── temperature_readings.py   psutil + WMI + nvidia-smi
+│
+├── dock_strip.py       Tk dock UI (drag, resize, pin)
+├── tray_runner.py      pystray system-tray
+├── live_chart.py       Tk + matplotlib live chart
+│
+├── process_monitor.py  background sampler (adaptive rate)
+├── spike_reporter.py   spike detection + per-day Markdown log
+├── alerts.py           AlertEvent · dispatcher · toast · full window · try_terminate
+├── janitor.py          conhost zombie scanner + cleanup panel
+└── install_shortcut.py desktop shortcut installer
+</code></pre>
+
+<p>מודל threading: thread daemon אחד לכל שירות ארוך-טווח (סמפלר התהליכים,
+סורק ה-janitor). כל עדכוני ה-UI מתועלים ל-thread הראשי של Tk דרך
+<code>root.after()</code>. אין multiprocessing, אין asyncio — מעט תלויות, קל לקריאה.</p>
+
+<h2>בדיקות</h2>
+
+<pre><code>pytest test_monitor.py</code></pre>
+
+<p>38 unit tests מכסים: טעינה ושמירה של config, לוגיקת CSV rotation, prune של ארכיון,
+ולידציית תלויות, formatters של התראות, הגנות על תהליכים מוגנים, זיהוי spike,
+gating של cooldown, השתקה של mute-list, snooze, dedup של oscillation, כללי
+סריקה של janitor, מטמון של parent-name.</p>
+
+<h2>הערות ומגבלות</h2>
+
+<ul>
+  <li><strong>ה-UI כרגע בעברית</strong> (המפתח דובר עברית). המחרוזות מרוכזות מספיק כדי לתרגם — PRs יתקבלו בברכה.</li>
+  <li><strong>טמפרטורת GPU / VRAM</strong>: רק NVIDIA (דרך <code>nvidia-smi</code>). תמיכת AMD / Intel Arc לא מיושמת.</li>
+  <li><strong>Linux / macOS</strong>: רוב הפיצ׳רים עובדים, אבל הדוק וה-installer של הקיצור מכוונים ל-Windows.</li>
+</ul>
+
+<hr>
+
+<footer>
+  <p>נבנה בקפידה · רישיון MIT · <a href="https://github.com/">צפייה ב-GitHub</a></p>
+</footer>
+
+</div>
+<!-- ================== END HEBREW ================== -->
+
+</div>
+
+<script>
+  // Language toggle with localStorage persistence + browser-language default
+  function setLang(code) {
+    const html = document.documentElement;
+    html.lang = code;
+    html.dir = (code === "he") ? "rtl" : "ltr";
+    try { localStorage.setItem("pulsedeck.lang", code); } catch (e) {}
+    document.getElementById("btn-en").classList.toggle("active", code === "en");
+    document.getElementById("btn-he").classList.toggle("active", code === "he");
+  }
+
+  (function init() {
+    let lang = "en";
+    try {
+      const stored = localStorage.getItem("pulsedeck.lang");
+      if (stored === "en" || stored === "he") {
+        lang = stored;
+      } else {
+        const nav = (navigator.language || "en").toLowerCase();
+        if (nav.startsWith("he") || nav.startsWith("iw")) lang = "he";
+      }
+    } catch (e) {}
+    setLang(lang);
+  })();
+</script>
+
 </body>
 </html>
