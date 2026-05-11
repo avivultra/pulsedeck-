@@ -292,6 +292,26 @@ def run_dock_main(args: object) -> None:
         except Exception:
             log.exception("Failed to open alerts panel from dock")
 
+    def _install_desktop_shortcut() -> None:
+        try:
+            from install_shortcut import install_shortcut as _install
+            from tkinter import messagebox
+            path = _install()
+            if path is not None:
+                messagebox.showinfo(
+                    "קיצור הותקן",
+                    f"נוצר קיצור בשולחן העבודה:\n{path}",
+                    parent=root,
+                )
+            else:
+                messagebox.showwarning(
+                    "התקנה נכשלה",
+                    "לא הצלחתי ליצור את הקיצור. ראה history/monitor.log",
+                    parent=root,
+                )
+        except Exception:
+            log.exception("Desktop shortcut installation failed from dock menu")
+
     def menu_popup(event: tk.Event) -> None:
         m = tk.Menu(root, tearoff=0)
         m.add_command(label="פתח גרף חי", command=_open_live_chart)
@@ -310,6 +330,9 @@ def run_dock_main(args: object) -> None:
         m.add_command(label="הגדל גופן", command=lambda: _bump_font(+0.1))
         m.add_command(label="הקטן גופן", command=lambda: _bump_font(-0.1))
         m.add_command(label="אפס מיקום", command=_reset_position)
+        m.add_separator()
+        m.add_command(label="📌 התקן קיצור בשולחן העבודה",
+                      command=_install_desktop_shortcut)
         m.add_separator()
         m.add_command(label="יציאה", command=on_close)
         try:

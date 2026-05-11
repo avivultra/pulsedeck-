@@ -1,0 +1,406 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PulseDeck — Real-time System Performance Monitor</title>
+<style>
+  :root {
+    --bg: #000;
+    --panel: #0a0a0a;
+    --panel2: #18181b;
+    --border: #27272a;
+    --fg: #fafafa;
+    --dim: #a1a1aa;
+    --muted: #52525b;
+    --cpu: #3b82f6;
+    --ram: #f97316;
+    --green: #10b981;
+    --purple: #a855f7;
+    --red: #ef4444;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: "Inter", "Segoe UI", system-ui, sans-serif;
+    background: var(--bg); color: var(--fg);
+    line-height: 1.65;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 60px 24px 100px; }
+  header {
+    text-align: center;
+    padding: 40px 0 56px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 48px;
+  }
+  .logo {
+    width: 96px; height: 96px;
+    margin: 0 auto 24px;
+    border-radius: 24px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 0 60px rgba(59, 130, 246, 0.15);
+  }
+  .logo svg { display: block; }
+  h1 {
+    font-size: 2.6em; margin: 0 0 8px;
+    letter-spacing: -0.02em; font-weight: 800;
+  }
+  .gradient-text {
+    background: linear-gradient(90deg, var(--cpu), var(--ram));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .tagline {
+    color: var(--dim); font-size: 1.15em;
+    max-width: 640px; margin: 0 auto;
+  }
+  .badges { margin-top: 22px; display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
+  .badge {
+    display: inline-block; padding: 4px 12px;
+    border-radius: 100px; background: var(--panel2);
+    color: var(--dim); font-size: 0.82em;
+    border: 1px solid var(--border);
+  }
+  .badge.cpu { color: var(--cpu); border-color: rgba(59,130,246,0.3); }
+  .badge.ram { color: var(--ram); border-color: rgba(249,115,22,0.3); }
+  .badge.green { color: var(--green); border-color: rgba(16,185,129,0.3); }
+
+  h2 {
+    font-size: 1.75em; margin: 56px 0 20px;
+    font-weight: 700; letter-spacing: -0.01em;
+  }
+  h3 { font-size: 1.2em; margin: 28px 0 10px; color: var(--cpu); font-weight: 700; }
+  p { color: var(--dim); margin: 0 0 14px; }
+  p strong, li strong { color: var(--fg); font-weight: 600; }
+  ul, ol { padding-inline-start: 22px; }
+  li { margin: 6px 0; color: var(--dim); }
+
+  code {
+    background: var(--panel2); padding: 2px 7px;
+    border-radius: 4px; font-size: 0.9em;
+    color: var(--fg);
+    font-family: "Cascadia Mono", "Consolas", monospace;
+  }
+  pre {
+    background: var(--panel); padding: 16px 20px;
+    border-radius: 8px; overflow-x: auto;
+    border: 1px solid var(--border);
+    font-size: 0.9em;
+    line-height: 1.55;
+  }
+  pre code { background: none; padding: 0; color: var(--fg); }
+
+  .grid {
+    display: grid; gap: 16px;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    margin: 24px 0;
+  }
+  .card {
+    background: var(--panel); padding: 22px;
+    border-radius: 10px; border: 1px solid var(--border);
+    transition: border-color 0.15s;
+  }
+  .card:hover { border-color: var(--cpu); }
+  .card h3 { margin-top: 0; }
+  .card.cpu h3 { color: var(--cpu); }
+  .card.ram h3 { color: var(--ram); }
+  .card.green h3 { color: var(--green); }
+  .card.red h3 { color: var(--red); }
+  .card.purple h3 { color: var(--purple); }
+
+  table {
+    width: 100%; border-collapse: collapse; margin: 20px 0;
+    font-size: 0.95em;
+  }
+  th, td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  th { color: var(--cpu); font-weight: 600; }
+  tr:hover td { background: rgba(255,255,255,0.02); }
+
+  .callout {
+    background: rgba(16, 185, 129, 0.08);
+    border-inline-start: 3px solid var(--green);
+    padding: 14px 18px;
+    border-radius: 6px;
+    margin: 22px 0;
+  }
+  .callout.warn {
+    background: rgba(249, 115, 22, 0.08);
+    border-color: var(--ram);
+  }
+  .callout strong { color: var(--fg); }
+
+  hr { border: 0; border-top: 1px solid var(--border); margin: 60px 0; }
+
+  footer {
+    color: var(--muted); font-size: 0.88em;
+    text-align: center; margin-top: 80px;
+  }
+  footer a { color: var(--cpu); text-decoration: none; }
+  footer a:hover { text-decoration: underline; }
+
+  kbd {
+    background: var(--panel2); border: 1px solid var(--border);
+    border-bottom-width: 2px; padding: 2px 8px;
+    border-radius: 4px; font-family: monospace;
+    font-size: 0.85em; color: var(--fg);
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <div class="logo">
+    <svg width="64" height="64" viewBox="0 0 64 64" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="cpuLine" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stop-color="#3b82f6" stop-opacity="0"/>
+          <stop offset="100%" stop-color="#3b82f6"/>
+        </linearGradient>
+        <linearGradient id="ramLine" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stop-color="#f97316" stop-opacity="0"/>
+          <stop offset="100%" stop-color="#f97316"/>
+        </linearGradient>
+      </defs>
+      <rect x="2" y="2" width="60" height="60" rx="10" fill="#0a0a0a" stroke="#27272a"/>
+      <line x1="10" y1="22" x2="54" y2="22" stroke="#27272a" stroke-width="0.5" stroke-dasharray="1,2"/>
+      <line x1="10" y1="34" x2="54" y2="34" stroke="#27272a" stroke-width="0.5" stroke-dasharray="1,2"/>
+      <line x1="10" y1="46" x2="54" y2="46" stroke="#27272a" stroke-width="0.5" stroke-dasharray="1,2"/>
+      <path d="M10 42 L18 28 L24 38 L30 22 L38 32 L46 18 L54 26"
+            fill="none" stroke="url(#cpuLine)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M10 28 L18 32 L24 26 L30 30 L38 24 L46 28 L54 22"
+            fill="none" stroke="url(#ramLine)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="54" cy="26" r="2.4" fill="#3b82f6"/>
+      <circle cx="54" cy="22" r="2.4" fill="#f97316"/>
+    </svg>
+  </div>
+  <h1><span class="gradient-text">PulseDeck</span></h1>
+  <p class="tagline">
+    A lightweight Python desktop monitor that watches your CPU, RAM, disk,
+    GPU, and processes in real time — detects load spikes, surfaces the
+    culprits, and lets you kill them safely. Without weighing your machine down.
+  </p>
+  <div class="badges">
+    <span class="badge cpu">Python 3.10+</span>
+    <span class="badge ram">Windows · Linux · macOS</span>
+    <span class="badge green">MIT License</span>
+    <span class="badge">~80 MB RAM</span>
+    <span class="badge">&lt; 1% CPU</span>
+  </div>
+</header>
+
+<h2>Why it exists</h2>
+<p>
+  Windows Task Manager is great when you're already in trouble. PulseDeck is
+  for the <strong>30 seconds before that</strong> — when your machine starts to
+  stutter and you want to know, without clicking, what's actually eating the
+  CPU right now.
+</p>
+
+<div class="callout">
+  <strong>Three promises.</strong>
+  <ol style="margin: 8px 0 0;">
+    <li><strong>Real-time data</strong> — second-by-second sampling, logged to CSV for analysis.</li>
+    <li><strong>Spike alerts</strong> — gentle toast in the bottom-right when load jumps. Click for the top processes responsible.</li>
+    <li><strong>Low overhead</strong> — adaptive sampling, batched system calls, incremental file reads. The monitor never becomes the problem it's monitoring.</li>
+  </ol>
+</div>
+
+<h2>Features</h2>
+
+<div class="grid">
+  <div class="card cpu">
+    <h3>📊 Live monitoring</h3>
+    <p>CPU · RAM · Disk · GPU · VRAM · Network · Temperature · Battery · Uptime. All sampled every second, written to CSV.</p>
+  </div>
+  <div class="card ram">
+    <h3>📈 Interactive chart</h3>
+    <p>Embedded matplotlib live chart with time-window selector (5 min / 15 min / 1 h / 6 h / 24 h / all). Pan, zoom, save as PNG.</p>
+  </div>
+  <div class="card red">
+    <h3>🔔 Spike alerts</h3>
+    <p>Bottom-right toast notification, auto-dismiss in 8 s. Click to see top 5 CPU + top 5 RAM processes with activity indicators.</p>
+  </div>
+  <div class="card green">
+    <h3>✕ Safe Kill</h3>
+    <p>Kill a runaway process from the alert window. Always asks confirmation. System-critical processes (svchost, csrss, …) are protected.</p>
+  </div>
+  <div class="card purple">
+    <h3>🧹 Process Janitor</h3>
+    <p>Detects accumulated <code>conhost.exe</code> zombie groups from dev CLIs. One-click cleanup, audited log, never automatic.</p>
+  </div>
+  <div class="card">
+    <h3>📁 Smart history</h3>
+    <p>Weekly CSV rotation, per-day Markdown reports for spike events, configurable retention (default 12 weeks).</p>
+  </div>
+  <div class="card">
+    <h3>🎛 Three UI modes</h3>
+    <p>Floating dock above the taskbar · system-tray icon · plain console. Mix and match. Dock supports drag, resize, pin.</p>
+  </div>
+  <div class="card">
+    <h3>⚙ Persistent config</h3>
+    <p>Preferences saved to <code>config.json</code>. CLI flags override. <code>--save-config</code> writes current run back.</p>
+  </div>
+</div>
+
+<h2>Quick start</h2>
+
+<pre><code>git clone https://github.com/&lt;your-user&gt;/pulsedeck.git
+cd pulsedeck
+pip install -r requirements.txt
+
+# Run with dock + history + tray
+python monitor.py --dock --history --tray
+
+# Install a desktop shortcut (Windows .lnk / Linux .desktop)
+python monitor.py --install-shortcut</code></pre>
+
+<p>On first run, <code>config.json</code> is created from defaults and lives
+next to <code>monitor.py</code>. To start at every boot on Windows, drop a
+shortcut to <code>Start-Monitor-Hidden.vbs</code> into <code>shell:startup</code>.</p>
+
+<h2>How alerts work</h2>
+
+<p>The sampler compares each new metric snapshot with the previous one. A
+spike is logged when:</p>
+
+<ul>
+  <li><strong>CPU rises 12 percentage points</strong> (or falls — both directions trigger).</li>
+  <li><strong>RAM rises 6 percentage points</strong>.</li>
+  <li><strong>CPU exceeds 88%</strong> sustained.</li>
+  <li><strong>RAM exceeds 92%</strong> with at least 2 pp uptick.</li>
+</ul>
+
+<p>When triggered (and the 5-minute cooldown is clear), a small toast slides
+into the bottom-right corner. <strong>Left-click</strong> opens the full alert
+window — top 5 CPU and top 5 RAM processes side by side, with activity badges
+(green = active now, amber = active recently, gray = background, purple =
+protected), uptime, and a flat red Kill button. <strong>Right-click</strong>
+the toast for snooze options (15 / 30 / 60 minutes).</p>
+
+<div class="callout warn">
+  <strong>Killing is always manual.</strong> Even with the "Clean all" button
+  on the Janitor panel, every action goes through a confirmation dialog. The
+  monitor will never terminate a process on its own.
+</div>
+
+<h2>Performance — how it stays cheap</h2>
+
+<table>
+  <thead><tr><th>Subsystem</th><th>Optimization</th></tr></thead>
+  <tbody>
+    <tr>
+      <td>Process sampler</td>
+      <td><strong>Adaptive rate</strong> — 2 s during the 30 s window after an alert; 5 s when idle. Resumes the fast rate immediately when a new alert fires.</td>
+    </tr>
+    <tr>
+      <td>Live chart</td>
+      <td><strong>Incremental CSV reader</strong> — only the appended tail since the previous refresh is parsed. 86× faster than a full re-read of a 1.5 MB metrics file.</td>
+    </tr>
+    <tr>
+      <td>Janitor</td>
+      <td><strong>Parent-name cache</strong> — one <code>psutil.Process()</code> call per unique parent PID, not per zombie.</td>
+    </tr>
+    <tr>
+      <td>Dock</td>
+      <td><strong>Layout pass only on change</strong> — no per-tick window repositioning. Topmost re-assertion throttled to every 5 s.</td>
+    </tr>
+    <tr>
+      <td>Logging</td>
+      <td>Cooldown-suppressed events demoted from INFO to DEBUG; spike-oscillation deduplicated within a 30 s window.</td>
+    </tr>
+  </tbody>
+</table>
+
+<h2>Configuration</h2>
+
+<p>All options live in <code>config.json</code>. Useful tweaks:</p>
+
+<pre><code>{
+  "spike": { "cpu_threshold": 12, "ram_threshold": 6, "enabled": true },
+  "alerts": {
+    "cooldown_seconds": 300,
+    "muted_processes": ["chrome.exe"],
+    "sound_enabled": false
+  },
+  "rotation": { "weeks_to_keep": 12 },
+  "janitor": {
+    "conhost_threshold_per_parent": 20,
+    "suspicious_parents": ["claude.exe", "electron.exe", "node.exe"]
+  },
+  "dock": { "pinned": true, "font_scale": 1.0 }
+}</code></pre>
+
+<h2>CLI</h2>
+
+<table>
+  <thead><tr><th>Flag</th><th>Default</th><th>Notes</th></tr></thead>
+  <tbody>
+    <tr><td><code>--dock</code> / <code>--no-dock</code></td><td>from config</td><td>Floating panel</td></tr>
+    <tr><td><code>--tray</code> / <code>--no-tray</code></td><td>from config</td><td>System tray icon</td></tr>
+    <tr><td><code>--history</code> / <code>--no-history</code></td><td>from config</td><td>Append to CSV</td></tr>
+    <tr><td><code>--alerts</code> / <code>--no-alerts</code></td><td>true</td><td>Show spike toasts</td></tr>
+    <tr><td><code>--alert-cooldown SEC</code></td><td>300</td><td>Min seconds between toasts</td></tr>
+    <tr><td><code>--disk PATH</code></td><td>system drive</td><td>Drive to monitor (<code>E:\</code>, <code>/mnt/data</code>)</td></tr>
+    <tr><td><code>--once</code></td><td>off</td><td>One snapshot, exit</td></tr>
+    <tr><td><code>--log-level LEVEL</code></td><td>WARNING</td><td>DEBUG / INFO / WARNING / ERROR</td></tr>
+    <tr><td><code>--install-shortcut</code></td><td>—</td><td>Create desktop shortcut, exit</td></tr>
+    <tr><td><code>--save-config</code></td><td>—</td><td>Persist current args to config.json</td></tr>
+  </tbody>
+</table>
+
+<h2>Architecture</h2>
+
+<pre><code>monitor.py              entry point
+├── config.py           config.json load/save
+├── dependencies.py     startup checks for psutil / pystray / matplotlib / PIL
+├── metric_history.py   CSV append, weekly rotation, archive pruning
+├── temperature_readings.py   psutil + WMI + nvidia-smi
+│
+├── dock_strip.py       Tk dock UI (drag, resize, pin)
+├── tray_runner.py      pystray system-tray
+├── live_chart.py       Tk + matplotlib live chart
+│
+├── process_monitor.py  background sampler (adaptive rate)
+├── spike_reporter.py   spike detection + per-day Markdown log
+├── alerts.py           AlertEvent · dispatcher · toast · full window · try_terminate
+├── janitor.py          conhost zombie scanner + cleanup panel
+└── install_shortcut.py desktop shortcut installer
+</code></pre>
+
+<p>Threading: one daemon thread per long-lived service (process sampler,
+janitor scanner). All UI updates funnelled to the Tk main thread via
+<code>root.after()</code>. No multiprocessing, no asyncio — small dependency
+surface, easy to read.</p>
+
+<h2>Testing</h2>
+
+<pre><code>pytest test_monitor.py</code></pre>
+
+<p>38 unit tests cover config load/save, CSV rotation, archive pruning,
+dependency validation, alert formatters, protected-process guards, spike
+detection, cooldown gating, mute-list suppression, snooze, oscillation
+dedup, janitor scanning rules, parent-name caching.</p>
+
+<h2>Notes & limitations</h2>
+
+<ul>
+  <li><strong>UI is currently Hebrew</strong> (developer is a Hebrew speaker). Strings are central enough to localise — PRs welcome.</li>
+  <li><strong>GPU temperature/VRAM</strong>: NVIDIA only (via <code>nvidia-smi</code>). AMD/Intel Arc support is not implemented.</li>
+  <li><strong>Linux/macOS</strong>: most features work, but the dock and shortcut installer are Windows-tuned.</li>
+</ul>
+
+<hr>
+
+<footer>
+  <p>
+    Built with care · MIT Licensed · <a href="https://github.com/">View on GitHub</a>
+  </p>
+</footer>
+
+</div>
+</body>
+</html>

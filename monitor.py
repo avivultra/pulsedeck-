@@ -415,6 +415,11 @@ def build_parser(cfg: dict) -> argparse.ArgumentParser:
         help="Run the Health Janitor background scanner (conhost zombies).",
     )
     p.add_argument(
+        "--install-shortcut",
+        action="store_true",
+        help="Create a desktop shortcut to PulseDeck and exit.",
+    )
+    p.add_argument(
         "--save-config",
         action="store_true",
         help="Save the effective configuration back to config.json and continue.",
@@ -529,6 +534,19 @@ def main() -> None:
         parser.error("--weeks-to-keep must be >= 1.")
 
     _setup_logging(args.log_level)
+
+    if getattr(args, "install_shortcut", False):
+        try:
+            from install_shortcut import install_shortcut as _install
+            path = _install()
+            if path is not None:
+                print(f"✓ Created shortcut: {path}")
+                sys.exit(0)
+            print("✗ Shortcut creation skipped or failed.")
+            sys.exit(1)
+        except Exception:
+            log.exception("install_shortcut failed")
+            sys.exit(1)
 
     missing = check_features(enabled_features_from_args(args))
     if missing:
