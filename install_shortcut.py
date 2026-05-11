@@ -40,7 +40,7 @@ def _desktop_dir() -> Path:
     return Path.home() / "Desktop"
 
 
-def _windows_install(shortcut_name: str = "PulseDeck — System Performance Monitor") -> Path:
+def _windows_install(shortcut_name: str = "PulseDeck") -> Path:
     """Create the .lnk on the Desktop. Returns the shortcut path."""
     import subprocess
 
@@ -107,7 +107,7 @@ def install_shortcut(name: str | None = None) -> Path | None:
     system = platform.system()
     try:
         if system == "Windows":
-            return _windows_install(name or "PulseDeck — System Performance Monitor")
+            return _windows_install(name or "PulseDeck")
         if system == "Linux":
             return _linux_install(name or "PulseDeck")
         if system == "Darwin":
