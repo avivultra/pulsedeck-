@@ -1,0 +1,108 @@
+================================================================
+  PulseDeck — How to install on a new computer
+================================================================
+
+Hi! Here's everything you need to do:
+
+----------------------------------------------------------------
+  STEP 1 — Make sure you have Python
+----------------------------------------------------------------
+
+Open Command Prompt and type:
+
+    python --version
+
+If you see something like "Python 3.13.0" — you're good, skip to STEP 2.
+
+If you see "command not found" or similar, install Python:
+  1. Go to https://www.python.org/downloads/
+  2. Click the big yellow "Download Python" button
+  3. Run the installer
+  4. ** IMPORTANT ** Check the box "Add Python to PATH" on the first screen
+  5. Click "Install Now"
+  6. Once done, close and reopen Command Prompt and verify with
+     `python --version`
+
+----------------------------------------------------------------
+  STEP 2 — Copy the folder
+----------------------------------------------------------------
+
+Copy this entire folder somewhere convenient on your hard drive,
+for example:
+
+    C:\Users\<your-name>\Documents\PulseDeck\
+
+(You can also put it on any drive; just keep it somewhere it
+won't be deleted.)
+
+----------------------------------------------------------------
+  STEP 3 — Run Install.bat
+----------------------------------------------------------------
+
+Double-click `Install.bat`.
+
+It will:
+  - Find your Python installation
+  - Install the required packages automatically (~1-2 minutes
+    first time, depending on your internet speed)
+  - Create a "PulseDeck" shortcut on your desktop with a custom
+    icon (looks like a futuristic dashboard)
+  - Optionally launch the monitor right away
+
+That's it!
+
+----------------------------------------------------------------
+  STEP 4 — Daily use
+----------------------------------------------------------------
+
+After installation:
+
+  - Double-click the "PulseDeck" icon on your desktop to start
+    the monitor. It runs in the background.
+  - The dock shows CPU/RAM/disk above your taskbar.
+  - The tray icon (by the clock) gives quick access.
+  - Right-click on the dock for the full menu:
+      • Open live chart
+      • View alerts and load detection
+      • Clean unnecessary processes
+      • Resize, move, pin, font size, etc.
+
+To start automatically when you log in:
+  1. Press Win+R
+  2. Type:   shell:startup
+  3. Press Enter
+  4. Drag a copy of the PulseDeck desktop shortcut into that folder.
+
+----------------------------------------------------------------
+  Troubleshooting
+----------------------------------------------------------------
+
+> "Python is not recognised..."
+  You didn't tick "Add Python to PATH" during install. Either:
+    a) Reinstall Python with that box ticked, OR
+    b) Edit Install.bat — replace `python` with the full path
+       like "C:\Users\you\AppData\Local\Programs\Python\Python313\python.exe"
+
+> "pip install failed"
+  Check your internet connection and run Install.bat again.
+
+> Dock doesn't appear
+  - Make sure the monitor is running (check Task Manager for
+    `pythonw.exe`)
+  - Right-click any visible PulseDeck UI element → "Reset position"
+  - If you only see the tray icon, that's also fine — the monitor
+    is running and writing data.
+
+> Want to uninstall?
+  - Delete the desktop shortcut "PulseDeck"
+  - Delete the folder (the one Install.bat lives in)
+  - That's it — PulseDeck is self-contained. No registry edits,
+    no installed services.
+
+----------------------------------------------------------------
+  Source code & updates
+----------------------------------------------------------------
+
+  https://github.com/avivultra/pulsedeck-
+
+Enjoy!
