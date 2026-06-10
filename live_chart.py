@@ -187,6 +187,7 @@ RAM_C  = "#f97316"   # orange-500
 DISK_C = "#10b981"   # emerald-500
 SWAP_C = "#a855f7"   # purple-500
 TEMP_C = "#ef4444"   # red-500
+VRAM_C = "#eab308"   # yellow-500
 
 
 def _read_rows(history_dir: Path, include_archive: bool, max_rows: int = 50_000) -> list[dict]:
@@ -286,6 +287,7 @@ def _parse_series(rows: list[dict]) -> dict:
     disk: list[float | None] = []
     swap: list[float | None] = []
     temps: list[float | None] = []
+    vram: list[float | None] = []
 
     for r in rows:
         ts_raw = (r.get("timestamp_iso") or "").strip()
@@ -301,13 +303,15 @@ def _parse_series(rows: list[dict]) -> dict:
         times.append(ts)
         cpu.append(c)
         ram.append(rm)
-        for series, key in ((disk, "disk_percent"), (swap, "swap_percent"), (temps, "temp_celsius")):
+        for series, key in ((disk, "disk_percent"), (swap, "swap_percent"),
+                            (temps, "temp_celsius"), (vram, "vram_percent")):
             raw = (r.get(key) or "").strip()
             try:
                 series.append(float(raw) if raw else None)
             except ValueError:
                 series.append(None)
-    return {"times": times, "cpu": cpu, "ram": ram, "disk": disk, "swap": swap, "temps": temps}
+    return {"times": times, "cpu": cpu, "ram": ram, "disk": disk,
+            "swap": swap, "temps": temps, "vram": vram}
 
 
 def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
@@ -344,6 +348,7 @@ def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
     show_disk = tk.BooleanVar(value=True)
     show_swap = tk.BooleanVar(value=True)
     show_temp = tk.BooleanVar(value=True)
+    show_vram = tk.BooleanVar(value=True)
     paused = tk.BooleanVar(value=False)
 
     # Time window options (label, minutes — None = show all)
@@ -393,6 +398,7 @@ def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
     _check(top, "ארכיון", include_archive).pack(side="left")
     _check(top, "Disk", show_disk).pack(side="left", padx=(6, 0))
     _check(top, "Swap", show_swap).pack(side="left", padx=(6, 0))
+    _check(top, "VRAM", show_vram).pack(side="left", padx=(6, 0))
     _check(top, "Temp", show_temp).pack(side="left", padx=(6, 0))
 
     tk.Frame(top, bg=GRID, width=1, height=18).pack(side="left", padx=10)
@@ -520,6 +526,7 @@ def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
         disk_v = _slice(series["disk"])
         swap_v = _slice(series["swap"])
         temps_v = _slice(series["temps"])
+        vram_v = _slice(series.get("vram", []) or [None] * len(all_times))
 
         # Subtle area fill under CPU only — gives a sense of "load", very faint
         ax1.fill_between(t, cpu, 0, color=CPU_C, alpha=0.06, linewidth=0)
@@ -538,6 +545,10 @@ def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
             swap_clean = [v if v is not None else float("nan") for v in swap_v]
             ax1.plot(t, swap_clean, color=SWAP_C, linewidth=1.0,
                      alpha=0.7, label="Swap")
+        if show_vram.get() and any(v is not None for v in vram_v):
+            vram_clean = [v if v is not None else float("nan") for v in vram_v]
+            ax1.plot(t, vram_clean, color=VRAM_C, linewidth=1.0,
+                     alpha=0.75, label="VRAM")
         if show_temp.get() and any(v is not None for v in temps_v):
             temps_clean = [v if v is not None else float("nan") for v in temps_v]
             ax2.plot(t, temps_clean, color=TEMP_C, linewidth=1.0,

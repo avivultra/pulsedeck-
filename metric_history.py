@@ -32,11 +32,38 @@ CSV_FIELDNAMES = (
     "disk_percent",
     "swap_percent",
     "temp_celsius",
+    "vram_percent",
 )
 
 
 def ensure_parent_dir(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def _migrate_csv_schema_if_needed(csv_path: Path) -> bool:
+    """If the existing CSV header is from an older schema, archive the file
+    and start fresh. Returns True if the file (after this call) is absent or
+    already on the current schema.
+
+    Archiving instead of in-place rewrite: simpler, atomic, and the rotation/
+    archive system already gives users access to old data files.
+    """
+    try:
+        with csv_path.open("r", encoding="utf-8", newline="") as f:
+            header = f.readline().strip()
+    except OSError:
+        return True
+    if header == ",".join(CSV_FIELDNAMES):
+        return True
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    target = csv_path.with_name(f"metrics-schema-legacy-{stamp}.csv")
+    try:
+        csv_path.rename(target)
+        log.info("CSV schema changed; archived old file to %s", target.name)
+    except OSError:
+        log.exception("Could not archive old-schema CSV %s", csv_path)
+        return False
+    return True
 
 
 def append_metrics_row(
@@ -48,9 +75,13 @@ def append_metrics_row(
     disk_percent: float | None,
     swap_percent: float | None,
     temp_celsius: float | None,
+    vram_percent: float | None = None,
 ) -> None:
     ensure_parent_dir(csv_path)
     file_exists = csv_path.exists() and csv_path.stat().st_size > 0
+    if file_exists:
+        if _migrate_csv_schema_if_needed(csv_path):
+            file_exists = csv_path.exists() and csv_path.stat().st_size > 0
     row = {
         "timestamp_iso": datetime.fromtimestamp(unix_time).isoformat(timespec="seconds"),
         "unix_time": f"{unix_time:.3f}",
@@ -59,6 +90,7 @@ def append_metrics_row(
         "disk_percent": "" if disk_percent is None else f"{disk_percent:.2f}",
         "swap_percent": "" if swap_percent is None else f"{swap_percent:.2f}",
         "temp_celsius": "" if temp_celsius is None else f"{temp_celsius:.1f}",
+        "vram_percent": "" if vram_percent is None else f"{vram_percent:.2f}",
     }
     with csv_path.open("a", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=CSV_FIELDNAMES)

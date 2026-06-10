@@ -259,6 +259,17 @@ class HistoryLogger:
         if not self.enabled:
             return
         now = time.time()
+        # VRAM as percent of total — cached upstream (10 s TTL), so this is
+        # a dict lookup, not a subprocess spawn, on most ticks.
+        vram_pct: float | None = None
+        try:
+            from temperature_readings import read_gpu_memory_mib
+
+            vram = read_gpu_memory_mib()
+            if vram is not None and vram[1] > 0:
+                vram_pct = (vram[0] / vram[1]) * 100.0
+        except Exception:
+            log.exception("VRAM read for history failed")
         append_metrics_row(
             self.csv_path,
             unix_time=now,
@@ -267,6 +278,7 @@ class HistoryLogger:
             disk_percent=snap.disk_percent,
             swap_percent=snap.swap_percent,
             temp_celsius=snap.temp_celsius,
+            vram_percent=vram_pct,
         )
         self.rows_logged += 1
         # Static PNG rendering removed — use the live chart (right-click dock → "פתח גרף חי").
@@ -500,12 +512,18 @@ def _migrate_history_layout() -> None:
 
 
 def _setup_logging(level_name: str) -> None:
+    from logging.handlers import RotatingFileHandler
+
     level = getattr(logging, level_name.upper(), logging.WARNING)
     DEFAULT_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
     log_file = DEFAULT_HISTORY_DIR / "monitor.log"
     handlers: list[logging.Handler] = []
     try:
-        handlers.append(logging.FileHandler(log_file, encoding="utf-8"))
+        # Rotate at 1 MB, keep 3 backups — caps log disk usage at ~4 MB
+        # no matter how long the monitor runs.
+        handlers.append(RotatingFileHandler(
+            log_file, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
+        ))
     except OSError:
         # If the log file can't be opened (locked / permission), keep stderr only.
         pass

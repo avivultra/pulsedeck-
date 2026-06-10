@@ -221,6 +221,21 @@ def _make_proc_card(parent: tk.Misc, proc: ProcessInfo, value_text: str,
                         cursor="hand2",
                         command=lambda: try_terminate(proc.pid, proc.name, win))
         btn.pack(side="left")
+
+    # Right-click anywhere on the card → mute menu for this process
+    def _card_menu(event: tk.Event) -> None:
+        menu = tk.Menu(win, tearoff=0)
+        menu.add_command(
+            label=f"🔇 השתק התראות עבור {proc.name}",
+            command=lambda: mute_process_persist(proc.name, parent_widget=win),
+        )
+        try:
+            menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            menu.grab_release()
+
+    for w in (inner, content, top, name_frame, action):
+        w.bind("<Button-3>", _card_menu)
     return outer
 
 
@@ -566,6 +581,46 @@ def _play_alert_sound() -> None:
         pass
 
 
+# The most recently constructed dispatcher — lets UI elements (alert cards)
+# reach the live mute list without threading a reference through every layer.
+_active_dispatcher: "AlertDispatcher | None" = None
+
+
+def mute_process_persist(process_name: str, parent_widget: tk.Misc | None = None) -> None:
+    """Mute a process in the running dispatcher AND persist to config.json.
+
+    Called from the alert-card right-click menu. Persisting means the mute
+    survives a monitor restart.
+    """
+    name = process_name.strip()
+    if not name:
+        return
+    # 1. Live dispatcher (immediate effect)
+    if _active_dispatcher is not None:
+        _active_dispatcher.add_mute(name)
+    # 2. Persist to config.json
+    try:
+        import config as app_config
+        cfg = app_config.load_config()
+        muted = cfg.setdefault("alerts", {}).setdefault("muted_processes", [])
+        if name.lower() not in {m.lower() for m in muted}:
+            muted.append(name)
+            app_config.save_config(cfg)
+        log.info("Muted process %s (persisted to config.json)", name)
+    except Exception:
+        log.exception("Could not persist mute for %s", name)
+    if parent_widget is not None:
+        try:
+            messagebox.showinfo(
+                "הושתק",
+                f"התראות שבהן {name} הוא הגורם המרכזי לא יוצגו יותר.\n"
+                "לביטול: ערוך את muted_processes ב-config.json.",
+                parent=parent_widget,
+            )
+        except tk.TclError:
+            pass
+
+
 class AlertDispatcher:
     def __init__(self, cooldown_seconds: float = 300.0,
                  muted_processes: list[str] | None = None,
@@ -578,6 +633,9 @@ class AlertDispatcher:
         # Mute list (case-insensitive)
         self._muted = {n.strip().lower() for n in (muted_processes or [])}
         self.sound_enabled = bool(sound_enabled)
+        # Register as the active dispatcher for UI helpers
+        global _active_dispatcher
+        _active_dispatcher = self
 
     def snooze(self, seconds: float) -> None:
         """Push the next allowed fire time forward by `seconds`."""
