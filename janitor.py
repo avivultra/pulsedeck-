@@ -296,6 +296,15 @@ def get_default_janitor(*, scan_interval_seconds: float = 300.0,
         return _default_janitor
 
 
+def peek_default_janitor() -> JanitorScanner | None:
+    """Return the singleton if it was already started, WITHOUT creating it.
+
+    Used by passive UI consumers (the dock badge) so that merely rendering
+    the dock can't resurrect a janitor the user disabled with --no-janitor.
+    """
+    return _default_janitor
+
+
 # ---------- Cleanup window UI ----------
 
 def open_cleanup_panel(parent) -> "object":

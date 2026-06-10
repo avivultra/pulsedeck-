@@ -401,10 +401,13 @@ def run_dock_main(args: object) -> None:
             extras.append(f"{plug} {snap.battery_percent:.0f}%")
         var_line3.set("  ·  ".join(extras))
 
-        # Janitor indicator — show "🧹 N" only when zombies detected
+        # Janitor indicator — show "🧹 N" only when zombies detected.
+        # peek (not get): the badge must never create/start the janitor —
+        # if the user ran --no-janitor, it stays off.
         try:
-            from janitor import get_default_janitor
-            n = get_default_janitor().count_total_zombies()
+            from janitor import peek_default_janitor
+            j = peek_default_janitor()
+            n = j.count_total_zombies() if j is not None else 0
         except Exception:
             n = 0
         if n > 0:

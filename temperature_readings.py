@@ -122,9 +122,12 @@ def read_primary_temp_celsius() -> float | None:
 
 # GPU readings — shared cache across temp + memory so the probe chain runs
 # at most once every _GPU_CACHE_TTL seconds even if both functions are called.
+# 10 s: each refresh spawns an external process (nvidia-smi / amd-smi), which
+# costs ~50-100 ms of CPU. GPU temp/VRAM don't change fast enough to justify
+# paying that more often.
 _GPU_READING_CACHE = None       # gpu_probes.GPUReading | None
 _GPU_READING_MONO: float | None = None
-_GPU_CACHE_TTL = 5.0
+_GPU_CACHE_TTL = 10.0
 
 
 def _get_cached_gpu_reading():
