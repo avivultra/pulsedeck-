@@ -312,10 +312,18 @@ def run_dock_main(args: object) -> None:
         except Exception:
             log.exception("Desktop shortcut installation failed from dock menu")
 
+    def _open_servers_panel() -> None:
+        try:
+            from server_scanner import open_servers_panel
+            open_servers_panel(root)
+        except Exception:
+            log.exception("Failed to open servers panel")
+
     def menu_popup(event: tk.Event) -> None:
         m = tk.Menu(root, tearoff=0)
         m.add_command(label="פתח גרף חי", command=_open_live_chart)
         m.add_command(label="🔔 זיהוי עומס / התראות", command=_open_alerts_panel)
+        m.add_command(label="🌐 שרתים פתוחים", command=_open_servers_panel)
         m.add_command(label="🧹 ניקוי תהליכים מיותרים", command=_open_janitor_panel)
         m.add_command(
             label="תיעודים רגילים",

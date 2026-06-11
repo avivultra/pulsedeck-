@@ -653,5 +653,66 @@ class TestProbeChains(unittest.TestCase):
             cpu_probes.CPU_PROBES = original
 
 
+
+class TestServerScanner(unittest.TestCase):
+    def test_scan_returns_listening_only(self) -> None:
+        from unittest.mock import MagicMock, patch
+        import server_scanner, psutil
+
+        def conn(pid, port, status):
+            c = MagicMock()
+            c.pid = pid; c.status = status
+            c.laddr = MagicMock(port=port)
+            return c
+
+        conns = [
+            conn(100, 3000, psutil.CONN_LISTEN),
+            conn(100, 3001, psutil.CONN_LISTEN),
+            conn(200, 443, psutil.CONN_ESTABLISHED),   # not LISTEN -> excluded
+        ]
+
+        def fake_process(pid):
+            m = MagicMock()
+            m.name.return_value = "node.exe"
+            m.cmdline.return_value = ["node", "server.js"]
+            return m
+
+        with patch("server_scanner.psutil.net_connections", return_value=conns),              patch("server_scanner.psutil.Process", side_effect=fake_process):
+            servers = server_scanner.scan_listening_servers()
+        self.assertEqual(len(servers), 1)
+        self.assertEqual(servers[0].pid, 100)
+        self.assertEqual(servers[0].ports, (3000, 3001))
+        self.assertEqual(servers[0].name, "node.exe")
+        self.assertIn("React", servers[0].port_hint)
+
+    def test_scan_hides_system_listeners_by_default(self) -> None:
+        from unittest.mock import MagicMock, patch
+        import server_scanner, psutil
+
+        c = MagicMock(); c.pid = 4; c.status = psutil.CONN_LISTEN
+        c.laddr = MagicMock(port=445)
+
+        def fake_process(pid):
+            m = MagicMock()
+            m.name.return_value = "svchost.exe"
+            m.cmdline.return_value = []
+            return m
+
+        with patch("server_scanner.psutil.net_connections", return_value=[c]),              patch("server_scanner.psutil.Process", side_effect=fake_process):
+            self.assertEqual(server_scanner.scan_listening_servers(), [])
+            shown = server_scanner.scan_listening_servers(include_system=True)
+            self.assertEqual(len(shown), 1)
+            self.assertTrue(shown[0].is_system)
+
+    def test_scan_excludes_self(self) -> None:
+        from unittest.mock import MagicMock, patch
+        import os, server_scanner, psutil
+
+        c = MagicMock(); c.pid = os.getpid(); c.status = psutil.CONN_LISTEN
+        c.laddr = MagicMock(port=9999)
+        with patch("server_scanner.psutil.net_connections", return_value=[c]):
+            self.assertEqual(server_scanner.scan_listening_servers(), [])
+
+
 if __name__ == "__main__":
     unittest.main()
