@@ -245,6 +245,17 @@ keeps running.
 | **Desktop shortcut installer** | ✅ (`.lnk` via PowerShell) | ✅ (`.desktop` file) | Manual hint printed |
 | `Start-Monitor-Hidden.vbs` | ✅ | n/a (use `python monitor.py`) | n/a |
 
+### Fan control (Lenovo Legion — optional)
+
+- A **🌀 fan button** on the far left of the dock toggles Lenovo "Extreme
+  Cooling" via its Nerve Sense keyboard shortcut (`Ctrl+Shift+1`). No admin,
+  no drivers — just a synthetic hotkey.
+- `fan_auto.py` is a standalone auto-controller: turns Extreme Cooling ON when
+  GPU temp ≥ 65 °C and OFF below 55 °C (hysteresis, configurable via
+  `--on`/`--off`). Run `python fan_auto.py --test` to verify the hotkey first.
+- **Lenovo Legion + Nerve Sense only.** On other machines the button simply
+  sends a hotkey that does nothing (harmless); everything else works normally.
+
 ### Other notes
 
 - **UI is currently Hebrew** (developer is a Hebrew speaker). Strings are

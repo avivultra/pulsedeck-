@@ -153,16 +153,33 @@ def run_dock_main(args: object) -> None:
     body.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
     top_row = tk.Frame(body, bg=bg)
+    # Fan / Extreme-Cooling toggle button (far left). We can't read the real
+    # cooling state, so we track a believed state for the tint only.
+    fan_state = {"on": False}
+    lbl_fan = tk.Label(top_row, text="🌀", bg=bg, fg=dim,
+                       font=_font(11), cursor="hand2")
     # Janitor indicator (left side, hidden when zombie count == 0)
     lbl_janitor = tk.Label(top_row, text="", bg=bg, fg="#ebcb8b",
                            font=_font(9, bold=True), anchor="w", cursor="hand2")
     lbl_cpu = tk.Label(top_row, text="CPU …", bg=bg, fg=fg, font=_font(10), anchor="w")
     lbl_temp = tk.Label(top_row, text="טמפ …", bg=bg, fg=accent, font=_font(9), anchor="e")
-    # Order matters: pack janitor first on the left so it sits before CPU
+    # Order matters: fan button leftmost, then janitor (dynamic), then CPU.
+    lbl_fan.pack(side=tk.LEFT, padx=(10, 0), pady=4)
     lbl_cpu.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=16, pady=4)
     lbl_temp.pack(side=tk.RIGHT, padx=16, pady=4)
     # janitor label is packed/forgotten dynamically inside tick()
     top_row.pack(fill=tk.X)
+
+    def _toggle_fan(_event=None):
+        try:
+            from fan_auto import send_extreme_cooling_toggle
+            send_extreme_cooling_toggle()
+            fan_state["on"] = not fan_state["on"]
+            lbl_fan.config(fg=accent if fan_state["on"] else dim)
+        except Exception:
+            log.exception("Extreme Cooling toggle failed")
+
+    lbl_fan.bind("<Button-1>", _toggle_fan)
 
     def _open_janitor_panel(_event=None):
         try:
@@ -209,6 +226,7 @@ def run_dock_main(args: object) -> None:
     def _bump_font(delta: float) -> None:
         nonlocal font_scale
         font_scale = max(0.7, min(1.6, font_scale + delta))
+        lbl_fan.config(font=_font(11))
         lbl_cpu.config(font=_font(10))
         lbl_temp.config(font=_font(9))
         lbl2.config(font=_font(9))
