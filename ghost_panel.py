@@ -23,6 +23,9 @@ from ghost_sweeper import (
     humanize_bytes,
     humanize_duration,
     persist_ignore,
+    redact_cmdline,
+    secrets_are_redacted,
+    set_secrets_redacted,
 )
 
 log = logging.getLogger(__name__)
@@ -136,6 +139,11 @@ def open_ghost_panel(parent) -> object:
         except tk.TclError:
             pass
 
+    # Masking of secrets inside displayed command lines. Read once when the
+    # window opens; the checkbox below writes changes straight back to
+    # config.json so the choice survives a restart.
+    redact_var = tk.BooleanVar(value=secrets_are_redacted())
+
     # ---- actions ----
 
     def _close_ghost(g: GhostProcess) -> None:
@@ -218,8 +226,12 @@ def open_ghost_panel(parent) -> object:
         _row(content, "הופעל", f"לפני {humanize_duration(g.age_seconds)} "
                                f"(בשעה {_fmt_clock(g.create_time)})")
         _row(content, "תיקייה", g.cwd or "— (אין גישה)", mono=True)
-        _row(content, "פקודה", _shorten(g.cmdline, 200) or "— (אין גישה)",
-             mono=True)
+        # Redact before shortening, so a truncated secret can never survive
+        # the ellipsis.
+        cmd = g.cmdline
+        if redact_var.get():
+            cmd = redact_cmdline(cmd)
+        _row(content, "פקודה", _shorten(cmd, 200) or "— (אין גישה)", mono=True)
         if g.first_scan:
             _row(content, "", "זמנים מסומנים כ\"לפחות\" — התהליך כבר רץ "
                               "כשהמוניטור עלה, אז אלו הערכות תחתונות.", fg=DIM)
@@ -292,6 +304,19 @@ def open_ghost_panel(parent) -> object:
               font=("Segoe UI", 10, "bold"), relief="flat", bd=0,
               activebackground="#8b6fe8", activeforeground=BG,
               cursor="hand2", padx=14, pady=6, command=_rescan).pack(side="left")
+
+    def _toggle_redaction() -> None:
+        set_secrets_redacted(redact_var.get())
+        _refresh()          # no rescan needed: masking is a display concern
+
+    tk.Checkbutton(
+        ftr, text="🔒 הסתר סיסמאות וטוקנים בשורת הפקודה",
+        variable=redact_var, command=_toggle_redaction,
+        bg=PANEL, fg=DIM, font=("Segoe UI", 9),
+        activebackground=PANEL, activeforeground=FG,
+        selectcolor=PANEL_HI, relief="flat", bd=0,
+        highlightthickness=0, cursor="hand2", anchor="e",
+    ).pack(side="left", padx=(12, 0))
 
     def _close_window() -> None:
         _unbind_wheel()

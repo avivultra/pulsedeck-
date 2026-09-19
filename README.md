@@ -88,6 +88,12 @@ Three core promises:
   are excluded by design
 - Dock badge `👻 N`, per-row "hide once" / "always ignore", and a close button
   that goes through the same confirmation + protected-process guard as alerts
+- **Secret masking** — a ghost's command line is the most useful field on its
+  card and also where credentials live (`--basic-auth=user:pw`,
+  `--password=`, `postgres://user:pw@host`). Passwords, tokens and API keys are
+  masked on screen by default so a screenshot cannot leak one. A checkbox in
+  the panel turns it off and on, and the choice persists. Masking is applied at
+  display time only — nothing is ever written to disk or sent anywhere
 
 ### History
 - **CSV log** every second to `history/regular/metrics.csv`
@@ -169,6 +175,7 @@ Key sections:
 - `janitor.conhost_threshold_per_parent` — minimum group size to flag
 - `sweeper.scan_interval_minutes` / `idle_minutes` — how often to sweep, and how
   long a process must be quiet before it counts as abandoned
+- `sweeper.redact_secrets` — mask passwords/tokens in displayed command lines
 - `sweeper.ignored_names` / `ignored_instances` — the panel's "ignore" buttons
   write here
 - `rotation.weeks_to_keep` — archive retention
@@ -252,12 +259,14 @@ Typical footprint: **~80 MB RAM, < 1 % CPU** on a modern desktop.
 pytest
 ```
 
-86 unit tests across `test_monitor.py` and `test_ghost_sweeper.py`.
+101 unit tests across `test_monitor.py` and `test_ghost_sweeper.py`.
 
 `test_ghost_sweeper.py` covers the sweeper (parent resolution under PID reuse,
 verdict classification, first-sighting estimates, cross-scan stability of
-reported ages, the ignore list) plus the responsiveness work (the sensor
-refresher's non-blocking contract and backoff, and the CSV fast path).
+reported ages, the ignore list, secret redaction in both directions — masked
+credentials and untouched ordinary arguments) plus the responsiveness work
+(the sensor refresher's non-blocking contract and backoff, and the CSV
+fast path).
 
 `test_monitor.py` covers: config load/save, CSV rotation logic, archive pruning,
 dependency validation, alert formatters, protected-process guards, spike

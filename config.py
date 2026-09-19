@@ -49,6 +49,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # before it counts as a ghost. Prevents flagging things that are
         # simply between jobs.
         "idle_minutes": 30,
+        # Mask secrets (passwords, tokens, API keys) inside the command lines
+        # the ghost panel displays. Toggleable from the panel itself.
+        "redact_secrets": True,
         # Names (lowercase) the user has permanently dismissed via the panel.
         "ignored_names": [],
         # "pid:create_time" keys dismissed for this one instance only.

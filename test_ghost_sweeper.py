@@ -78,6 +78,98 @@ class TestGhostSweeperHelpers(unittest.TestCase):
         self.assertIs(gs._trim_lineage(lineage, {1}, keep_dead=10), lineage)
 
 
+class TestCommandLineRedaction(unittest.TestCase):
+    """Secrets must be masked; ordinary arguments must survive untouched."""
+
+    def _r(self, text: str) -> str:
+        from ghost_sweeper import redact_cmdline
+
+        return redact_cmdline(text)
+
+    def _assert_masked(self, cmdline: str, secret: str) -> None:
+        from ghost_sweeper import MASK
+
+        out = self._r(cmdline)
+        self.assertNotIn(secret, out, f"secret survived redaction in: {out}")
+        self.assertIn(MASK, out)
+
+    def test_equals_form(self) -> None:
+        self._assert_masked("mysql -u root --password=hunter2 db", "hunter2")
+
+    def test_colon_form(self) -> None:
+        self._assert_masked("app.exe --client-secret:xyz789 --verbose", "xyz789")
+
+    def test_space_separated_form(self) -> None:
+        self._assert_masked("node s.js --api-key abc123XYZ --port 3000",
+                            "abc123XYZ")
+
+    def test_basic_auth_pair(self) -> None:
+        self._assert_masked("ngrok http 8473 --basic-auth=aviv:Sup3rS3cret",
+                            "Sup3rS3cret")
+
+    def test_bare_env_style_assignment(self) -> None:
+        self._assert_masked("set PASSWORD=letmein && run.bat", "letmein")
+
+    def test_url_password_is_masked_but_host_survives(self) -> None:
+        out = self._r("psql postgres://aviv:pw123@localhost:5432/app")
+        self.assertNotIn("pw123", out)
+        self.assertIn("localhost:5432/app", out)
+        self.assertIn("aviv", out)          # username is not a secret
+
+    def test_token_variants(self) -> None:
+        for flag in ("--token", "--access-token", "--refresh_token",
+                     "--apikey", "--auth-token"):
+            self._assert_masked(f"python app.py {flag}=ghp_secretvalue",
+                                "ghp_secretvalue")
+
+    def test_case_insensitive(self) -> None:
+        self._assert_masked("app --PASSWORD=Hunter2", "Hunter2")
+
+    def test_key_pointing_at_a_file_is_not_a_secret(self) -> None:
+        # `--key` on its own is nearly always a path to a .pem, not a password.
+        cmd = "python train.py --key models/private.pem --epochs 10"
+        self.assertEqual(self._r(cmd), cmd)
+
+    def test_ordinary_command_line_is_untouched(self) -> None:
+        cmd = ("E:" + chr(92) + "Watchdog" + chr(92) + "python.exe "
+               "-m http.server 8473 --bind 127.0.0.1")
+        self.assertEqual(self._r(cmd), cmd)
+
+    def test_path_containing_the_word_password_is_untouched(self) -> None:
+        cmd = ("ssh -i C:" + chr(92) + "Users" + chr(92) + "aviv" + chr(92)
+               + "my-password-notes" + chr(92) + "id_rsa host")
+        self.assertEqual(self._r(cmd), cmd)
+
+    def test_empty_input(self) -> None:
+        self.assertEqual(self._r(""), "")
+
+    def test_redaction_is_idempotent(self) -> None:
+        once = self._r("app --password=hunter2")
+        self.assertEqual(self._r(once), once)
+
+    def test_multiple_secrets_in_one_line(self) -> None:
+        out = self._r("app --password=aaa --token=bbb --api-key=ccc")
+        for secret in ("aaa", "bbb", "ccc"):
+            self.assertNotIn(secret, out)
+
+    def test_preference_round_trips_through_config(self) -> None:
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        import config as app_config
+        import ghost_sweeper as gs
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            with patch.object(app_config, "PROJECT_DIR", base):
+                self.assertTrue(gs.secrets_are_redacted())   # default on
+                gs.set_secrets_redacted(False)
+                self.assertFalse(gs.secrets_are_redacted())
+                gs.set_secrets_redacted(True)
+                self.assertTrue(gs.secrets_are_redacted())
+
+
 class TestGhostSweeperParentResolution(unittest.TestCase):
     """The PID-reuse trap is the whole reason _resolve_parent exists."""
 

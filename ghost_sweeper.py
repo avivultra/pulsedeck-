@@ -37,6 +37,7 @@ from __future__ import annotations
 import getpass
 import logging
 import os
+import re
 import threading
 import time
 from dataclasses import dataclass
@@ -221,6 +222,74 @@ def humanize_bytes(n: int | None) -> str:
     if abs(mib) < 1024:
         return f"{mib:.0f} MiB"
     return f"{mib / 1024:.2f} GiB"
+
+
+# ------------------------------------------------- command-line redaction
+#
+# A ghost's full command line is the single most useful field on its card —
+# it is what tells you which project the process belongs to. It is also where
+# credentials end up: `ngrok http 8473 --basic-auth=user:hunter2`,
+# `mysql -u root --password=...`, `psql postgres://user:pw@host/db`.
+#
+# Nothing here is ever written to disk or sent anywhere; this is purely about
+# what appears on screen, so a screenshot or a screen-share cannot leak a
+# secret. Redaction is applied at DISPLAY time, not at scan time, so the
+# toggle takes effect immediately without re-scanning.
+
+MASK = "••••••"
+
+# Flag names whose value is a secret. Deliberately specific: a bare `--key`
+# is usually a path to a .pem file, so it is matched only in compound forms
+# (api-key, access-key, secret-key).
+_SECRET_KEY = (
+    r"(?:passwd|password|pwd|passphrase"
+    r"|client[-_]?secret|secret[-_]?key|secret"
+    r"|access[-_]?token|refresh[-_]?token|bearer|token"
+    r"|api[-_]?key|apikey|access[-_]?key"
+    r"|basic[-_]?auth|auth[-_]?token|credentials?|auth)"
+)
+
+_REDACTORS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # --password=VALUE   --token:VALUE   PASSWORD=VALUE
+    (re.compile(rf"(?i)(\b-{{0,2}}{_SECRET_KEY}\s*[=:]\s*)(\S+)"), r"\1" + MASK),
+    # --password VALUE  (space separated; requires a leading dash so that the
+    # word "password" in a file path is not mistaken for a flag)
+    (re.compile(rf"(?i)(\s--?{_SECRET_KEY}\s+)(?!-)(\S+)"), r"\1" + MASK),
+    # scheme://user:password@host — mask only the password portion
+    (re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://[^\s:/@]+:)([^\s@]+)(@)"),
+     r"\1" + MASK + r"\3"),
+)
+
+
+def redact_cmdline(text: str) -> str:
+    """Mask passwords / tokens / API keys in a command line for display."""
+    if not text:
+        return text
+    for pattern, replacement in _REDACTORS:
+        text = pattern.sub(replacement, text)
+    return text
+
+
+def secrets_are_redacted() -> bool:
+    """Whether the panel should mask secrets. Defaults to True."""
+    try:
+        import config as app_config
+        cfg = app_config.load_config().get("sweeper", {}) or {}
+        return bool(cfg.get("redact_secrets", True))
+    except Exception:
+        log.exception("Could not read redact_secrets; defaulting to masked")
+        return True
+
+
+def set_secrets_redacted(enabled: bool) -> None:
+    """Persist the masking preference to config.json."""
+    try:
+        import config as app_config
+        cfg = app_config.load_config()
+        cfg.setdefault("sweeper", {})["redact_secrets"] = bool(enabled)
+        app_config.save_config(cfg)
+    except Exception:
+        log.exception("Could not persist redact_secrets")
 
 
 REASON_LABELS: dict[str, str] = {
