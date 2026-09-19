@@ -5,6 +5,7 @@ cover a different concern: not "is this value formatted right" but "does the
 monitor stay responsive, and are the durations it reports honest".
 """
 
+import logging
 import tempfile
 import time
 import unittest
@@ -363,6 +364,189 @@ class TestGhostSweeperTracking(unittest.TestCase):
         sw.ignore_instance("7:123")
         self.assertTrue(sw._is_ignored("other.exe", "7:123"))
         self.assertFalse(sw._is_ignored("other.exe", "8:123"))
+
+
+def _fake_ghost(**overrides):
+    """A GhostProcess with sane defaults, for log/formatting tests."""
+    import ghost_sweeper as gs
+
+    fields = dict(
+        pid=1234, name="node.exe", exe="C:/node.exe",
+        cmdline="node server.js", cwd="E:/proj", username="aviv",
+        create_time=1000.0, age_seconds=7200.0,
+        parent_pid=99, parent_name="claude.exe", parent_alive=False,
+        orphaned_for_seconds=3600.0, orphan_time_is_lower_bound=False,
+        cpu_seconds_total=2.0, cpu_percent_window=0.1,
+        cpu_percent_lifetime=0.1, idle_for_seconds=3600.0,
+        idle_time_is_lower_bound=False, rss_bytes=10 * 1024 * 1024,
+        rss_delta_bytes=0, num_threads=4, listening_ports=(),
+        established_connections=0, reasons=("ORPHAN",), verdict="FINISHED",
+        verdict_detail="…", observed_seconds=1200.0, first_scan=False,
+    )
+    fields.update(overrides)
+    return gs.GhostProcess(**fields)
+
+
+class _CapturingHandler(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.lines: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.lines.append(record.getMessage())
+
+
+class TestSweepLog(unittest.TestCase):
+    """history/sweeper.log is the only thing that survives to be read later."""
+
+    def setUp(self) -> None:
+        import ghost_sweeper as gs
+
+        # Swap the module's audit logger for an isolated one that writes
+        # nowhere. Without this, running the suite in the project directory
+        # would append fake "node.exe pid=1234" rows to the user's real
+        # history/sweeper.log — the very file this feature exists to keep
+        # trustworthy weeks later.
+        self.handler = _CapturingHandler()
+        isolated = logging.getLogger("ghost_sweeper.audit.test")
+        isolated.handlers = [self.handler]
+        isolated.setLevel(logging.INFO)
+        isolated.propagate = False
+
+        original = gs._sweep_logger
+        gs._sweep_logger = isolated
+
+        def _restore() -> None:
+            gs._sweep_logger = original
+            isolated.handlers = []
+
+        self.addCleanup(_restore)
+
+    def _lines(self, prefix: str) -> list[str]:
+        return [ln for ln in self.handler.lines if ln.startswith(prefix)]
+
+    def test_every_sweep_writes_one_summary_with_a_breakdown(self) -> None:
+        import ghost_sweeper as gs
+
+        sw = gs.GhostSweeper()
+        sw._record_sweep([_fake_ghost(verdict="FINISHED"),
+                          _fake_ghost(pid=2, verdict="STUCK")])
+        summaries = self._lines("sweep:")
+        self.assertEqual(len(summaries), 1)
+        self.assertIn("2 ghosts", summaries[0])
+        self.assertIn("finished=1", summaries[0])
+        self.assertIn("stuck=1", summaries[0])
+        self.assertIn("leaking=0", summaries[0])
+
+    def test_empty_sweep_still_records_the_zero(self) -> None:
+        import ghost_sweeper as gs
+
+        gs.GhostSweeper()._record_sweep([])
+        self.assertIn("0 ghosts", self._lines("sweep:")[0])
+
+    def test_new_ghost_is_logged_once_not_every_sweep(self) -> None:
+        import ghost_sweeper as gs
+
+        sw = gs.GhostSweeper()
+        g = _fake_ghost()
+        sw._record_sweep([g])
+        sw._record_sweep([g])
+        sw._record_sweep([g])
+        self.assertEqual(len(self._lines("NEW ")), 1)
+        self.assertEqual(len(self._lines("sweep:")), 3)
+
+    def test_new_line_carries_the_decision_making_fields(self) -> None:
+        import ghost_sweeper as gs
+
+        gs.GhostSweeper()._record_sweep([_fake_ghost()])
+        line = self._lines("NEW ")[0]
+        for expected in ("node.exe", "pid=1234", "verdict=FINISHED",
+                         "reasons=ORPHAN", "claude.exe", "dead",
+                         "cwd=E:/proj"):
+            self.assertIn(expected, line)
+
+    def test_gone_is_logged_when_a_ghost_disappears(self) -> None:
+        import ghost_sweeper as gs
+
+        sw = gs.GhostSweeper()
+        sw._record_sweep([_fake_ghost()])
+        sw._record_sweep([])
+        gone = self._lines("GONE ")
+        self.assertEqual(len(gone), 1)
+        self.assertIn("node.exe", gone[0])
+        self.assertIn("FINISHED", gone[0])
+
+    def test_gone_is_not_repeated_on_later_sweeps(self) -> None:
+        import ghost_sweeper as gs
+
+        sw = gs.GhostSweeper()
+        sw._record_sweep([_fake_ghost()])
+        sw._record_sweep([])
+        sw._record_sweep([])
+        self.assertEqual(len(self._lines("GONE ")), 1)
+
+    def test_command_lines_are_always_masked_on_disk(self) -> None:
+        """The panel checkbox governs the screen. A log file outlives the
+        session, so it never gets the unmasked version."""
+        from unittest.mock import patch
+
+        import ghost_sweeper as gs
+
+        secret_cmd = "ngrok http 8473 --basic-auth=aviv:Sup3rS3cret"
+        # Even with display masking explicitly turned OFF:
+        with patch.object(gs, "secrets_are_redacted", return_value=False):
+            gs.GhostSweeper()._record_sweep([_fake_ghost(cmdline=secret_cmd)])
+        line = self._lines("NEW ")[0]
+        self.assertNotIn("Sup3rS3cret", line)
+        self.assertIn(gs.MASK, line)
+
+    def test_user_action_is_recorded(self) -> None:
+        import ghost_sweeper as gs
+
+        gs.GhostSweeper().log_user_action(_fake_ghost(), "closed")
+        line = self._lines("USER ")[0]
+        self.assertIn("closed", line)
+        self.assertIn("node.exe", line)
+        self.assertIn("pid=1234", line)
+
+    def test_a_pid_reused_by_a_new_process_counts_as_a_new_ghost(self) -> None:
+        import ghost_sweeper as gs
+
+        sw = gs.GhostSweeper()
+        sw._record_sweep([_fake_ghost(pid=7, create_time=1000.0)])
+        sw._record_sweep([_fake_ghost(pid=7, create_time=9999.0)])
+        self.assertEqual(len(self._lines("NEW ")), 2)
+        self.assertEqual(len(self._lines("GONE ")), 1)
+
+    def test_logging_failure_never_breaks_a_scan(self) -> None:
+        from unittest.mock import patch
+
+        import ghost_sweeper as gs
+
+        sw = gs.GhostSweeper()
+        with patch.object(gs, "_get_sweep_logger",
+                          side_effect=OSError("disk full")):
+            sw._do_scan()               # must not raise
+        self.assertIsInstance(sw.get_ghosts(), list)
+
+
+class TestLogDurationFormat(unittest.TestCase):
+    def test_compact_ascii_durations(self) -> None:
+        import ghost_sweeper as gs
+
+        self.assertEqual(gs._log_duration(None), "?")
+        self.assertEqual(gs._log_duration(45), "45s")
+        self.assertEqual(gs._log_duration(90), "1m")
+        self.assertEqual(gs._log_duration(3600), "1h")
+        self.assertEqual(gs._log_duration(3600 + 20 * 60), "1h20m")
+        self.assertEqual(gs._log_duration(86400), "1d")
+        self.assertEqual(gs._log_duration(86400 + 4 * 3600), "1d4h")
+
+    def test_durations_are_pure_ascii_for_grepping(self) -> None:
+        import ghost_sweeper as gs
+
+        for seconds in (0, 45, 90, 3600, 100000, 1_000_000):
+            gs._log_duration(seconds).encode("ascii")   # raises if not
 
 
 class TestGhostSweeperIntegration(unittest.TestCase):

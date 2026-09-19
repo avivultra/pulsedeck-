@@ -92,8 +92,9 @@ Three core promises:
   card and also where credentials live (`--basic-auth=user:pw`,
   `--password=`, `postgres://user:pw@host`). Passwords, tokens and API keys are
   masked on screen by default so a screenshot cannot leak one. A checkbox in
-  the panel turns it off and on, and the choice persists. Masking is applied at
-  display time only — nothing is ever written to disk or sent anywhere
+  the panel turns it off and on, and the choice persists. The toggle governs
+  the screen; anything written to `history/sweeper.log` is masked
+  unconditionally
 
 ### History
 - **CSV log** every second to `history/regular/metrics.csv`
@@ -101,6 +102,11 @@ Three core promises:
   archive files; older than 12 weeks are pruned
 - **Spike log per day** in `history/spikes/spikes-YYYY-MM-DD.md` (Markdown,
   human-readable, with timestamp + reason + top processes)
+- **Sweep log** in `history/sweeper.log` (rotated) — one summary line per
+  sweep plus `NEW` / `GONE` / `USER` events, so weeks later you can answer
+  "which project keeps leaking processes" and "do ghosts pile up or get
+  cleaned up". Command lines are **always masked here**, regardless of the
+  panel's display toggle — a log file outlives the session
 - **Application log** in `history/monitor.log` (rotated, configurable level)
 
 ---
@@ -259,14 +265,16 @@ Typical footprint: **~80 MB RAM, < 1 % CPU** on a modern desktop.
 pytest
 ```
 
-101 unit tests across `test_monitor.py` and `test_ghost_sweeper.py`.
+113 unit tests across `test_monitor.py` and `test_ghost_sweeper.py`.
 
 `test_ghost_sweeper.py` covers the sweeper (parent resolution under PID reuse,
 verdict classification, first-sighting estimates, cross-scan stability of
 reported ages, the ignore list, secret redaction in both directions — masked
 credentials and untouched ordinary arguments) plus the responsiveness work
 (the sensor refresher's non-blocking contract and backoff, and the CSV
-fast path).
+fast path) and the sweep log (one NEW per ghost, GONE on disappearance,
+unconditional masking on disk, and isolation so the suite never touches the
+user's real log).
 
 `test_monitor.py` covers: config load/save, CSV rotation logic, archive pruning,
 dependency validation, alert formatters, protected-process guards, spike
@@ -321,7 +329,7 @@ keeps running.
   Cooling" via its Nerve Sense keyboard shortcut (`Ctrl+Shift+1`). No admin,
   no drivers — just a synthetic hotkey.
 - `fan_auto.py` is a standalone auto-controller: turns Extreme Cooling ON when
-  GPU temp ≥ 65 °C and OFF below 55 °C (hysteresis, configurable via
+  GPU temp ≥ 50 °C and OFF below 43 °C (hysteresis, configurable via
   `--on`/`--off`). Run `python fan_auto.py --test` to verify the hotkey first.
 - **Lenovo Legion + Nerve Sense only.** On other machines the button simply
   sends a hotkey that does nothing (harmless); everything else works normally.

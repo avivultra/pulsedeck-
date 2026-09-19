@@ -149,12 +149,14 @@ def open_ghost_panel(parent) -> object:
     def _close_ghost(g: GhostProcess) -> None:
         # try_terminate asks for confirmation and refuses protected processes.
         if try_terminate(g.pid, g.name, win):
+            sweeper.log_user_action(g, "closed")
             sweeper.trigger_rescan()
             _refresh()
 
     def _ignore_instance(g: GhostProcess) -> None:
         sweeper.ignore_instance(g.instance_key)
         persist_ignore(instance_key=g.instance_key)
+        sweeper.log_user_action(g, "hidden once")
         sweeper.trigger_rescan()
         _refresh()
 
@@ -168,6 +170,7 @@ def open_ghost_panel(parent) -> object:
             return
         sweeper.ignore_name(g.name)
         persist_ignore(name=g.name)
+        sweeper.log_user_action(g, "ignored by name")
         sweeper.trigger_rescan()
         _refresh()
 
@@ -317,6 +320,20 @@ def open_ghost_panel(parent) -> object:
         selectcolor=PANEL_HI, relief="flat", bd=0,
         highlightthickness=0, cursor="hand2", anchor="e",
     ).pack(side="left", padx=(12, 0))
+
+    def _open_log() -> None:
+        try:
+            from metric_history import DEFAULT_HISTORY_DIR
+            from tray_runner import _open_path
+            _open_path(DEFAULT_HISTORY_DIR / "sweeper.log")
+        except Exception:
+            log.exception("Could not open the sweep log")
+
+    tk.Button(ftr, text="📄 יומן סריקות", bg=PANEL_HI, fg=DIM,
+              font=("Segoe UI", 9), relief="flat", bd=0,
+              activebackground=BORDER, activeforeground=FG,
+              cursor="hand2", padx=12, pady=6,
+              command=_open_log).pack(side="left", padx=(12, 0))
 
     def _close_window() -> None:
         _unbind_wheel()

@@ -224,6 +224,61 @@ def humanize_bytes(n: int | None) -> str:
     return f"{mib / 1024:.2f} GiB"
 
 
+# ------------------------------------------------------------- sweep log
+#
+# The panel only ever shows a snapshot of right now. This log is what makes
+# the sweeper answer questions weeks later: which project keeps leaking
+# processes, whether ghosts accumulate or get cleaned up, which app is the
+# repeat offender. English and greppable, matching janitor.log / monitor.log.
+
+_sweep_logger: logging.Logger | None = None
+
+
+def _get_sweep_logger() -> logging.Logger:
+    """Lazy-init the rotating logger behind history/sweeper.log."""
+    global _sweep_logger
+    if _sweep_logger is not None:
+        return _sweep_logger
+
+    audit = logging.getLogger("ghost_sweeper.audit")
+    audit.setLevel(logging.INFO)
+    audit.propagate = False          # never bubble into monitor.log
+
+    try:
+        from logging.handlers import RotatingFileHandler
+
+        from metric_history import DEFAULT_HISTORY_DIR
+        DEFAULT_HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+        handler = RotatingFileHandler(
+            DEFAULT_HISTORY_DIR / "sweeper.log",
+            maxBytes=512_000, backupCount=3, encoding="utf-8",
+        )
+        handler.setFormatter(logging.Formatter(
+            "%(asctime)s — %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+        audit.addHandler(handler)
+    except Exception:
+        log.exception("Could not initialize the sweep log")
+    _sweep_logger = audit
+    return audit
+
+
+def _log_duration(seconds: float | None) -> str:
+    """Compact ASCII duration for log lines: 45s / 12m / 3h20m / 2d4h."""
+    if seconds is None:
+        return "?"
+    seconds = max(0.0, float(seconds))
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    minutes = int(seconds // 60)
+    if minutes < 60:
+        return f"{minutes}m"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours}h{minutes}m" if minutes else f"{hours}h"
+    days, hours = divmod(hours, 24)
+    return f"{days}d{hours}h" if hours else f"{days}d"
+
+
 # ------------------------------------------------- command-line redaction
 #
 # A ghost's full command line is the single most useful field on its card —
@@ -347,6 +402,10 @@ class GhostSweeper:
         # This is what lets us name a parent after it has died.
         self._lineage: dict[int, tuple[str, float]] = {}
         self._scan_count = 0
+        # instance_key -> (name, verdict, wall time first reported, cwd).
+        # Drives the NEW / GONE lines in the sweep log; survives a process's
+        # death, which its _Track does not.
+        self._reported: dict[str, tuple[str, str, float, str]] = {}
 
     # ---- lifecycle ----
 
@@ -389,6 +448,66 @@ class GhostSweeper:
         with self._lock:
             self._ghosts = ghosts
             self._last_scan_wall = time.time()
+        try:
+            self._record_sweep(ghosts)
+        except Exception:
+            log.exception("Writing the sweep log failed")
+
+    def _record_sweep(self, ghosts: list[GhostProcess]) -> None:
+        """Append this sweep to history/sweeper.log.
+
+        Three kinds of line, because three different questions get asked weeks
+        later: a per-sweep summary (how does the count trend?), a NEW line per
+        ghost the first time it is reported (which project keeps leaking
+        processes?), and a GONE line when one disappears (did it get cleaned up
+        or did it linger for days?).
+        """
+        audit = _get_sweep_logger()
+        counts: dict[str, int] = {}
+        for g in ghosts:
+            counts[g.verdict] = counts.get(g.verdict, 0) + 1
+        breakdown = " ".join(f"{k.lower()}={counts.get(k, 0)}"
+                             for k in ("FINISHED", "STUCK", "LEAKING", "WORKING"))
+        audit.info("sweep: %d ghosts (%s)", len(ghosts), breakdown)
+
+        now = time.time()
+        current: dict[str, tuple[str, str, float, str]] = {}
+        for g in ghosts:
+            key = g.instance_key
+            previous = self._reported.get(key)
+            first_reported = previous[2] if previous else now
+            current[key] = (g.name, g.verdict, first_reported, g.cwd)
+            if previous is None:
+                # Command lines go to disk ALWAYS masked. The panel checkbox
+                # governs the screen only — a log file outlives the session and
+                # is far more likely to be copied around.
+                audit.info(
+                    "NEW %s pid=%d verdict=%s reasons=%s parent=%s(%d,%s) "
+                    "idle=%s age=%s cwd=%s cmd=%s",
+                    g.name, g.pid, g.verdict, "+".join(g.reasons),
+                    g.parent_name, g.parent_pid,
+                    "alive" if g.parent_alive else "dead",
+                    _log_duration(g.idle_for_seconds),
+                    _log_duration(g.age_seconds),
+                    g.cwd or "?", redact_cmdline(g.cmdline) or "?",
+                )
+
+        for key, (name, verdict, first_reported, cwd) in self._reported.items():
+            if key not in current:
+                audit.info("GONE %s (%s) after %s on the list, cwd=%s",
+                           name, verdict, _log_duration(now - first_reported),
+                           cwd or "?")
+        self._reported = current
+
+    def log_user_action(self, ghost: GhostProcess, action: str) -> None:
+        """Record something the user did from the panel (close / ignore)."""
+        try:
+            _get_sweep_logger().info(
+                "USER %s: %s pid=%d verdict=%s cwd=%s",
+                action, ghost.name, ghost.pid, ghost.verdict, ghost.cwd or "?",
+            )
+        except Exception:
+            log.exception("Could not write user action to the sweep log")
 
     # ---- ignore list ----
 
