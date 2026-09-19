@@ -1,174 +1,192 @@
 """
-Best-effort CPU / system temperature in Celsius.
+Best-effort CPU / system temperature in Celsius, plus GPU temp/VRAM.
 
-- Linux / many laptops: psutil.sensors_temperatures()
-- Windows: optional NVIDIA GPU temp via `nvidia-smi` when installed (see `read_gpu_temp_celsius`).
+THREADING CONTRACT — read this before changing anything here.
+
+Every public reader in this module (`read_primary_temp_celsius`,
+`read_gpu_temp_celsius`, `read_gpu_memory_mib`) is **non-blocking**: it
+returns whatever is in the cache and returns immediately. It never spawns
+a subprocess, never touches WMI, never waits on I/O.
+
+The actual sensor reads — which DO spawn `powershell` / `nvidia-smi` and can
+take hundreds of milliseconds (or hit a 4 s timeout) — happen on a single
+daemon refresher thread. This matters because the dock's `tick()` runs on the
+Tk main thread: any blocking call there freezes the whole UI, including
+dragging, the right-click menu, and the fan button.
+
+Cold start: the first call returns None (UI shows "—") while the refresher
+fills the cache in the background. That is deliberate — a one-second "—" is
+far better than a one-second freeze.
+
+Failing probes back off: after 3 consecutive failures the retry interval grows
+geometrically up to `_MAX_BACKOFF_SEC`. On machines where WMI simply does not
+expose MSAcpi_ThermalZoneTemperature (common on laptops), this turns an endless
+every-8-seconds PowerShell spawn into a handful of attempts and then silence.
 """
 
 from __future__ import annotations
 
 import logging
-import os
-import shutil
-import subprocess
+import threading
 import time
-
-import psutil
 
 log = logging.getLogger(__name__)
 
-_CACHE_TTL_SEC = 8.0
-_cache_value: float | None = None
-_last_read_mono: float | None = None
+# Base refresh intervals. Sensors don't change fast enough to justify less.
+_CPU_TTL_SEC = 8.0
+_GPU_TTL_SEC = 10.0
+
+# Backoff for probes that keep failing: after this many consecutive failures
+# the effective TTL doubles per extra failure, capped at _MAX_BACKOFF_SEC.
+_FAILURES_BEFORE_BACKOFF = 3
+_MAX_BACKOFF_SEC = 900.0          # 15 minutes
+
+# How often the refresher thread wakes up to see if anything is stale.
+_REFRESHER_TICK_SEC = 1.0
 
 
-def _from_psutil() -> float | None:
-    try:
-        data = psutil.sensors_temperatures()
-    except (AttributeError, NotImplementedError, OSError):
-        return None
-    if not data:
-        return None
-    candidates: list[tuple[float, str, str]] = []
-    for chip, entries in data.items():
-        for e in entries:
-            if e.current is None:
-                continue
-            label = (e.label or "").lower()
-            candidates.append((float(e.current), chip.lower(), label))
+class _SensorSlot:
+    """One cached sensor value + its staleness / backoff bookkeeping.
 
-    if not candidates:
-        return None
+    `value` is read by UI threads without a lock (single attribute read of an
+    immutable object — atomic under CPython). Everything the refresher mutates
+    for scheduling lives behind `_lock`.
+    """
 
-    for temp, chip, label in candidates:
-        blob = f"{chip} {label}"
-        if any(
-            k in blob
-            for k in (
-                "package",
-                "edge",
-                "tdie",
-                "tctl",
-                "cpu",
-                "core",
-                "k10temp",
-                "zenpower",
-            )
-        ):
-            return temp
+    def __init__(self, name: str, ttl: float, reader) -> None:
+        self.name = name
+        self.base_ttl = ttl
+        self._reader = reader
+        self.value = None
+        self._last_attempt_mono: float | None = None
+        self._failures = 0
+        self._lock = threading.Lock()
 
-    return max(candidates, key=lambda x: x[0])[0]
+    def effective_ttl(self) -> float:
+        """TTL after applying failure backoff."""
+        if self._failures < _FAILURES_BEFORE_BACKOFF:
+            return self.base_ttl
+        extra = self._failures - _FAILURES_BEFORE_BACKOFF + 1
+        return min(self.base_ttl * (2 ** extra), _MAX_BACKOFF_SEC)
+
+    def is_stale(self, now: float) -> bool:
+        with self._lock:
+            if self._last_attempt_mono is None:
+                return True
+            return (now - self._last_attempt_mono) >= self.effective_ttl()
+
+    def refresh(self) -> None:
+        """Run the (possibly slow) reader. Called ONLY on the refresher thread."""
+        try:
+            result = self._reader()
+        except Exception:
+            log.exception("Sensor %r raised during refresh", self.name)
+            result = None
+
+        with self._lock:
+            self._last_attempt_mono = time.monotonic()
+            if result is None:
+                self._failures += 1
+                if self._failures == _FAILURES_BEFORE_BACKOFF:
+                    log.info(
+                        "Sensor %r failed %d times; backing off (next attempts up "
+                        "to %.0f s apart). This is normal on hardware that does "
+                        "not expose the sensor.",
+                        self.name, self._failures, _MAX_BACKOFF_SEC,
+                    )
+            else:
+                self._failures = 0
+        # Publish outside the lock — readers never take it.
+        self.value = result
 
 
-def _from_windows_wmi() -> float | None:
-    if os.name != "nt":
-        return None
-    ps = (
-        "$m = Get-CimInstance -Namespace root/wmi -ClassName MSAcpi_ThermalZoneTemperature "
-        "-ErrorAction SilentlyContinue; "
-        "if (-not $m) { exit 2 }; "
-        "($m | ForEach-Object { ($_.CurrentTemperature / 10.0) - 273.15 }) "
-        "| Measure-Object -Maximum | Select-Object -ExpandProperty Maximum"
-    )
-    creationflags = 0
-    if hasattr(subprocess, "CREATE_NO_WINDOW"):
-        creationflags = subprocess.CREATE_NO_WINDOW
-    try:
-        proc = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
-            capture_output=True,
-            text=True,
-            timeout=4,
-            creationflags=creationflags,
+# ---------- The blocking readers (run on the refresher thread only) ----------
+
+def _read_cpu_temp_blocking() -> float | None:
+    from cpu_probes import read_cpu_temperature_celsius
+    return read_cpu_temperature_celsius()
+
+
+def _read_gpu_blocking():
+    from gpu_probes import read_gpu
+    return read_gpu()
+
+
+_cpu_slot = _SensorSlot("cpu_temp", _CPU_TTL_SEC, _read_cpu_temp_blocking)
+_gpu_slot = _SensorSlot("gpu", _GPU_TTL_SEC, _read_gpu_blocking)
+_ALL_SLOTS = (_cpu_slot, _gpu_slot)
+
+
+# ---------- Refresher thread ----------
+
+_refresher_thread: threading.Thread | None = None
+_refresher_lock = threading.Lock()
+_refresher_stop = threading.Event()
+
+
+def _refresher_loop() -> None:
+    while not _refresher_stop.is_set():
+        now = time.monotonic()
+        for slot in _ALL_SLOTS:
+            if _refresher_stop.is_set():
+                return
+            if slot.is_stale(now):
+                slot.refresh()
+        if _refresher_stop.wait(_REFRESHER_TICK_SEC):
+            return
+
+
+def _ensure_refresher() -> None:
+    """Start the refresher thread once, lazily, on first sensor read."""
+    global _refresher_thread
+    if _refresher_thread is not None and _refresher_thread.is_alive():
+        return
+    with _refresher_lock:
+        if _refresher_thread is not None and _refresher_thread.is_alive():
+            return
+        _refresher_stop.clear()
+        _refresher_thread = threading.Thread(
+            target=_refresher_loop, name="sensor-refresher", daemon=True
         )
-    except (OSError, subprocess.TimeoutExpired, FileNotFoundError):
-        return None
-    if proc.returncode != 0:
-        return None
-    text = (proc.stdout or "").strip().replace(",", ".")
-    if not text:
-        return None
-    try:
-        val = float(text.splitlines()[-1])
-    except ValueError:
-        return None
-    if val < -40 or val > 150:
-        return None
-    return val
+        _refresher_thread.start()
 
+
+def stop_sensor_refresher() -> None:
+    """Signal the refresher to exit. Used on shutdown and in tests."""
+    _refresher_stop.set()
+
+
+def refresh_sensors_now() -> None:
+    """Synchronously refresh every sensor. For --once / console / tests.
+
+    This DOES block. Never call it from the Tk main thread.
+    """
+    for slot in _ALL_SLOTS:
+        slot.refresh()
+
+
+# ---------- Public, non-blocking readers ----------
 
 def read_primary_temp_celsius() -> float | None:
-    """Representative CPU temperature for logging / UI, or None if unknown.
+    """Representative CPU temperature, or None if unknown/not yet read.
 
-    Routes through the cpu_probes chain (psutil → Windows WMI → Linux
-    sysfs → macOS). Result is cached for `_CACHE_TTL_SEC` to avoid hammering
-    sensors / spawning powershell every tick.
+    Non-blocking: returns the cached value. See the module docstring.
     """
-    global _cache_value, _last_read_mono
-    now = time.monotonic()
-    if _last_read_mono is not None and (now - _last_read_mono) < _CACHE_TTL_SEC:
-        return _cache_value
-
-    try:
-        from cpu_probes import read_cpu_temperature_celsius
-        t = read_cpu_temperature_celsius()
-    except Exception:
-        log.exception("CPU temperature probe chain failed; falling back to None")
-        t = None
-    _cache_value = t
-    _last_read_mono = now
-    return t
-
-
-# GPU readings — shared cache across temp + memory so the probe chain runs
-# at most once every _GPU_CACHE_TTL seconds even if both functions are called.
-# 10 s: each refresh spawns an external process (nvidia-smi / amd-smi), which
-# costs ~50-100 ms of CPU. GPU temp/VRAM don't change fast enough to justify
-# paying that more often.
-_GPU_READING_CACHE = None       # gpu_probes.GPUReading | None
-_GPU_READING_MONO: float | None = None
-_GPU_CACHE_TTL = 10.0
-
-
-def _get_cached_gpu_reading():
-    """Return a recent GPUReading from the probe chain, or None.
-
-    The chain is `gpu_probes.GPU_PROBES` — NVIDIA first, then AMD, Intel,
-    then Linux sysfs. Each probe is cheap to *skip* (single `which()`),
-    so machines with NVIDIA keep their original behaviour: NvidiaSmiProbe
-    succeeds and the rest are never tried.
-    """
-    global _GPU_READING_CACHE, _GPU_READING_MONO
-    now = time.monotonic()
-    if _GPU_READING_MONO is not None and (now - _GPU_READING_MONO) < _GPU_CACHE_TTL:
-        return _GPU_READING_CACHE
-    try:
-        from gpu_probes import read_gpu
-        _GPU_READING_CACHE = read_gpu()
-    except Exception:
-        log.exception("GPU probe chain raised; caching None")
-        _GPU_READING_CACHE = None
-    _GPU_READING_MONO = now
-    return _GPU_READING_CACHE
+    _ensure_refresher()
+    return _cpu_slot.value
 
 
 def read_gpu_temp_celsius() -> float | None:
-    """GPU die temperature, vendor-agnostic. Returns None if no probe succeeds.
-
-    Tries NVIDIA → AMD → Intel → Linux sysfs in order. Caches the underlying
-    reading for 5 seconds.
-    """
-    reading = _get_cached_gpu_reading()
+    """GPU die temperature (vendor-agnostic), or None. Non-blocking."""
+    _ensure_refresher()
+    reading = _gpu_slot.value
     return reading.temp_celsius if reading is not None else None
 
 
 def read_gpu_memory_mib() -> tuple[int, int] | None:
-    """GPU VRAM (used, total) in MiB, vendor-agnostic. None if not available.
-
-    Returns None if the active probe didn't report memory (e.g. the Linux
-    sysfs fallback only provides temperature).
-    """
-    reading = _get_cached_gpu_reading()
+    """GPU VRAM (used, total) in MiB, or None. Non-blocking."""
+    _ensure_refresher()
+    reading = _gpu_slot.value
     if reading is None or reading.mem_total_mib is None:
         return None
     return (reading.mem_used_mib or 0, reading.mem_total_mib)

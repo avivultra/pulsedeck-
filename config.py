@@ -41,6 +41,19 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "font_scale": 1.0,   # 0.7 .. 1.6 — multiplier on font size
         "pinned": True,      # always-on-top: re-asserted every tick when pinned
     },
+    "sweeper": {
+        "enabled": True,
+        # How often the sweeper wakes up and re-scans.
+        "scan_interval_minutes": 20,
+        # A process must have been dormant / orphaned for at least this long
+        # before it counts as a ghost. Prevents flagging things that are
+        # simply between jobs.
+        "idle_minutes": 30,
+        # Names (lowercase) the user has permanently dismissed via the panel.
+        "ignored_names": [],
+        # "pid:create_time" keys dismissed for this one instance only.
+        "ignored_instances": [],
+    },
     "janitor": {
         "enabled": True,
         "scan_interval_minutes": 5,

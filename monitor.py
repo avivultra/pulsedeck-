@@ -107,12 +107,42 @@ def ascii_bar(percent: float, width: int = 14) -> str:
     return "[" + "#" * filled + "-" * (width - filled) + "]"
 
 
+# Negative cache for swap. On machines where the Windows PDH performance
+# counters are disabled, psutil.swap_memory() raises — and measured on such a
+# machine the FAILING call costs a median 4 ms and spikes to ~900 ms. Paying
+# that once per second on the dock's Tk thread is visible as UI stutter, and it
+# can never succeed. So after a few failures we stop asking, retrying only
+# occasionally in case the counters come back (a reboot or a `lodctr /R`).
+_SWAP_FAILURES_BEFORE_GIVING_UP = 3
+_SWAP_RETRY_SECONDS = 600.0
+_swap_failures = 0
+_swap_last_failure_mono: float | None = None
+
+
 def _swap_percent() -> float | None:
+    global _swap_failures, _swap_last_failure_mono
+
+    if _swap_failures >= _SWAP_FAILURES_BEFORE_GIVING_UP:
+        if (_swap_last_failure_mono is not None
+                and (time.monotonic() - _swap_last_failure_mono) < _SWAP_RETRY_SECONDS):
+            return None
+
     try:
         sw = psutil.swap_memory()
     except (OSError, RuntimeError):
         # Windows: PDH / performance counters may be disabled or unavailable.
+        _swap_failures += 1
+        _swap_last_failure_mono = time.monotonic()
+        if _swap_failures == _SWAP_FAILURES_BEFORE_GIVING_UP:
+            log.info(
+                "swap_memory() failed %d times (performance counters look "
+                "disabled); backing off to one attempt every %.0f s.",
+                _swap_failures, _SWAP_RETRY_SECONDS,
+            )
         return None
+
+    _swap_failures = 0
+    _swap_last_failure_mono = None
     if sw.total == 0:
         return None
     return sw.percent
@@ -427,6 +457,12 @@ def build_parser(cfg: dict) -> argparse.ArgumentParser:
         help="Run the Health Janitor background scanner (conhost zombies).",
     )
     p.add_argument(
+        "--sweeper",
+        action=argparse.BooleanOptionalAction,
+        default=bool(cfg.get("sweeper", {}).get("enabled", True)),
+        help="Run the Ghost Sweeper background scan for abandoned processes.",
+    )
+    p.add_argument(
         "--install-shortcut",
         action="store_true",
         help="Create a desktop shortcut to PulseDeck and exit.",
@@ -601,6 +637,23 @@ def main() -> None:
         except Exception:
             log.exception("Could not start Janitor scanner")
 
+    # Ghost Sweeper — finds processes/servers/agents that finished and were
+    # never cleaned up. Started eagerly for the same reason as the Janitor: the
+    # dock badge needs a count on its first tick. Its own first scan runs
+    # synchronously inside start(), on this thread, before the UI exists.
+    sweeper_cfg = effective.get("sweeper", {})
+    if sweeper_cfg.get("enabled", True) and getattr(args, "sweeper", True):
+        try:
+            from ghost_sweeper import get_default_sweeper
+
+            get_default_sweeper(
+                scan_interval_seconds=float(
+                    sweeper_cfg.get("scan_interval_minutes", 20)) * 60,
+                idle_seconds=float(sweeper_cfg.get("idle_minutes", 30)) * 60,
+            )
+        except Exception:
+            log.exception("Could not start Ghost Sweeper")
+
     # Alert dispatcher (shared across modes; gates by cooldown)
     args._alert_dispatcher = None
     if effective["alerts"]["enabled"]:
@@ -669,6 +722,10 @@ def main() -> None:
     )
 
     if args.once:
+        # One-shot mode has no background refresher lifetime to speak of, and
+        # blocking here is fine (no UI thread), so read the sensors inline.
+        from temperature_readings import refresh_sensors_now
+        refresh_sensors_now()
         snap = collect_snapshot(disk_path)
         render_snapshot(snap, no_clear=args.no_clear)
         history.log(snap)

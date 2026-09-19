@@ -40,6 +40,43 @@ def ensure_parent_dir(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
 
+# --- Per-append fast path -------------------------------------------------
+#
+# append_metrics_row() runs once per second from the dock's Tk main thread.
+# Unmemoised it cost ~6 filesystem operations per row: a mkdir, two stat()s,
+# and a full open()+readline() of the CSV just to re-verify a header that had
+# not changed since the process started. On a disk that is itself under load —
+# exactly when the user is staring at the monitor — that showed up as UI
+# stutter. Both checks are now memoised and invalidated on the only events
+# that can actually falsify them.
+
+# Parent directories we have already created this process.
+_ENSURED_DIRS: set[str] = set()
+
+# csv path -> file size observed immediately after our last successful append.
+# A size that is >= what we last saw means nothing truncated or replaced the
+# file, so the header we already validated is still the header. Rotation and
+# schema-archiving both shrink or remove the file, which invalidates the entry.
+_HEADER_VERIFIED: dict[str, int] = {}
+
+
+def _ensure_parent_dir_cached(path: Path) -> None:
+    key = str(path.parent)
+    if key in _ENSURED_DIRS:
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _ENSURED_DIRS.add(key)
+
+
+def invalidate_csv_caches(csv_path: Path | None = None) -> None:
+    """Drop memoised header/dir state. Call after rotating or moving a CSV."""
+    if csv_path is None:
+        _HEADER_VERIFIED.clear()
+        _ENSURED_DIRS.clear()
+        return
+    _HEADER_VERIFIED.pop(str(csv_path), None)
+
+
 def _migrate_csv_schema_if_needed(csv_path: Path) -> bool:
     """If the existing CSV header is from an older schema, archive the file
     and start fresh. Returns True if the file (after this call) is absent or
@@ -77,11 +114,29 @@ def append_metrics_row(
     temp_celsius: float | None,
     vram_percent: float | None = None,
 ) -> None:
-    ensure_parent_dir(csv_path)
-    file_exists = csv_path.exists() and csv_path.stat().st_size > 0
-    if file_exists:
-        if _migrate_csv_schema_if_needed(csv_path):
-            file_exists = csv_path.exists() and csv_path.stat().st_size > 0
+    _ensure_parent_dir_cached(csv_path)
+    key = str(csv_path)
+    try:
+        size = csv_path.stat().st_size
+    except OSError:
+        size = 0
+    file_exists = size > 0
+
+    if not file_exists:
+        # Absent or empty: nothing to migrate, and any previous verification
+        # is void because the next write recreates the file from scratch.
+        _HEADER_VERIFIED.pop(key, None)
+    else:
+        verified_at = _HEADER_VERIFIED.get(key)
+        if verified_at is None or size < verified_at:
+            # Either we have never checked this file, or it shrank — which
+            # means rotation or an external edit replaced it. Re-read the header.
+            if _migrate_csv_schema_if_needed(csv_path):
+                try:
+                    size = csv_path.stat().st_size
+                except OSError:
+                    size = 0
+                file_exists = size > 0
     row = {
         "timestamp_iso": datetime.fromtimestamp(unix_time).isoformat(timespec="seconds"),
         "unix_time": f"{unix_time:.3f}",
@@ -97,6 +152,12 @@ def append_metrics_row(
         if not file_exists:
             w.writeheader()
         w.writerow(row)
+
+    # Record the post-write size so the next call can skip the header re-read.
+    try:
+        _HEADER_VERIFIED[key] = csv_path.stat().st_size
+    except OSError:
+        _HEADER_VERIFIED.pop(key, None)
 
 
 def render_history_chart(
@@ -369,6 +430,9 @@ def rotate_history(
             writer.writeheader()
             writer.writerows(keep_rows)
         tmp.replace(main)
+        # The file on disk is a brand-new, smaller one. Drop the memoised
+        # header verification so the next append re-validates it.
+        invalidate_csv_caches(main)
     except OSError:
         log.exception("Failed to rewrite %s", main)
         if tmp.exists():

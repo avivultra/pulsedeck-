@@ -69,6 +69,26 @@ Three core promises:
 - One-click cleanup window — never kills automatically; every action is logged to
   `history/janitor.log` for audit
 
+### Ghost Sweeper
+- Background sweep (every 20 min by default) for processes, dev servers and CLI
+  agents that **finished their work and were never cleaned up**
+- Three independent signals, each explained on the card:
+  - **Orphan** — the terminal/agent that launched it exited and left it running
+  - **Idle server** — listening on a port with zero connections for the whole window
+  - **Dormant** — no measurable CPU work for a long stretch
+- Every finding carries the detail needed to decide without opening Task
+  Manager: the **parent it belonged to** (named even after the parent died),
+  **how long it has been orphaned**, whether it **finished or got stuck**,
+  lifetime CPU, memory growth, thread count, listening ports, active
+  connections, working directory and full command line
+- A verdict per process — *finished / stuck / leaking / still working* — with a
+  one-sentence explanation. A process with live network connections is demoted
+  to "still working" even if it is orphaned
+- Only ever reports processes **you own**; Windows services and other accounts
+  are excluded by design
+- Dock badge `👻 N`, per-row "hide once" / "always ignore", and a close button
+  that goes through the same confirmation + protected-process guard as alerts
+
 ### History
 - **CSV log** every second to `history/regular/metrics.csv`
 - **Weekly rotation** — rows older than 7 days move to `metrics-YYYY-WW.csv`
@@ -125,6 +145,7 @@ To launch at every boot, drop a shortcut to `Start-Monitor-Hidden.vbs` into
 | `--alerts` / `--no-alerts` | true | Show spike toasts |
 | `--alert-cooldown SEC` | 300 | Min seconds between toasts |
 | `--janitor` / `--no-janitor` | true | conhost zombie scanner |
+| `--sweeper` / `--no-sweeper` | true | Ghost Sweeper (abandoned processes) |
 | `--disk PATH` | system drive | Drive to monitor (`E:\`, `/mnt/data`) |
 | `--interval SEC` | 1.0 | Loop sample period |
 | `--once` | off | One snapshot, exit |
@@ -146,6 +167,10 @@ Key sections:
 - `alerts.cooldown_seconds`, `muted_processes`, `sound_enabled`
 - `dock.x`/`y`/`font_scale`/`pinned` — remembered between sessions
 - `janitor.conhost_threshold_per_parent` — minimum group size to flag
+- `sweeper.scan_interval_minutes` / `idle_minutes` — how often to sweep, and how
+  long a process must be quiet before it counts as abandoned
+- `sweeper.ignored_names` / `ignored_instances` — the panel's "ignore" buttons
+  write here
 - `rotation.weeks_to_keep` — archive retention
 
 ---
@@ -169,7 +194,9 @@ monitor.py            ← entry point; sets up logging, config, dispatchers
 ├── spike_reporter.py  ← spike detection + per-day markdown log
 ├── alerts.py          ← AlertEvent, dispatcher (cooldown/snooze/mute),
 │                        toast, full alert window, safe try_terminate
-└── janitor.py         ← conhost zombie scanner + cleanup panel
+├── janitor.py         ← conhost zombie scanner + cleanup panel
+├── ghost_sweeper.py   ← abandoned-process detection (lineage + activity)
+└── ghost_panel.py     ← the sweeper's report window
 ```
 
 Threading model: one daemon thread per long-lived service (process sampler,
@@ -180,7 +207,29 @@ No multiprocessing, no asyncio — keeps the dependency surface small.
 
 ## Performance
 
-Adaptive sampling is the centerpiece:
+**Nothing slow runs on the UI thread.** That is the single rule the dock's
+responsiveness depends on, and it was learned the hard way:
+
+- **Sensor reads are asynchronous.** `read_primary_temp_celsius()` and the GPU
+  readers return a cached value instantly; the actual probes — which spawn
+  `powershell` (up to a 4 s timeout) and `nvidia-smi` (~500 ms) — run on a
+  dedicated refresher thread. Previously these ran inline in the dock's
+  once-per-second `tick()`, freezing the whole UI every 8–10 seconds.
+- **Probes that keep failing back off.** After 3 consecutive failures the retry
+  interval grows geometrically up to 15 minutes. On a laptop whose WMI does not
+  expose `MSAcpi_ThermalZoneTemperature`, this turns an endless
+  PowerShell-spawn-every-8-seconds into a handful of attempts and then silence.
+- **The same treatment for swap.** `psutil.swap_memory()` raises on Windows
+  machines with the PDH performance counters disabled — and the *failing* call
+  costs a median 4 ms with spikes near 900 ms. It is now negatively cached.
+- **CSV appends are memoised.** Writing one row used to re-`mkdir` the parent,
+  `stat` twice and re-read the file header every second. The header check is
+  now cached and invalidated only on truncation or rotation.
+
+Measured on the development machine, the per-tick data collection went from
+recurring 400–900 ms stalls to a **median of 4.6 ms, p95 8 ms**.
+
+Adaptive sampling is the other half:
 - **Process sampler**: 2 s tick during the 30 s after any alert (so process data
   is fresh when the user opens a popup), 5 s tick when idle
 - **Janitor scanner**: 5 min tick (configurable), with cached parent-name lookup
@@ -188,6 +237,10 @@ Adaptive sampling is the centerpiece:
   is parsed (~86× faster than a full re-read of a 1.5 MB file)
 - **Dock**: `place_window()` runs only when the dock actually moves; topmost
   re-assertion throttled to every 5 ticks (~5 s)
+- **Ghost Sweeper**: one sweep every 20 minutes on its own thread. Expensive
+  per-process lookups (`cmdline`, `cwd`, `username`) are done only for the
+  handful of processes that actually get flagged — including `username` in the
+  bulk `process_iter` alone took a sweep from 1.7 s to 5.2 s
 
 Typical footprint: **~80 MB RAM, < 1 % CPU** on a modern desktop.
 
@@ -196,10 +249,17 @@ Typical footprint: **~80 MB RAM, < 1 % CPU** on a modern desktop.
 ## Testing
 
 ```bash
-pytest test_monitor.py
+pytest
 ```
 
-45 unit tests cover: config load/save, CSV rotation logic, archive pruning,
+86 unit tests across `test_monitor.py` and `test_ghost_sweeper.py`.
+
+`test_ghost_sweeper.py` covers the sweeper (parent resolution under PID reuse,
+verdict classification, first-sighting estimates, cross-scan stability of
+reported ages, the ignore list) plus the responsiveness work (the sensor
+refresher's non-blocking contract and backoff, and the CSV fast path).
+
+`test_monitor.py` covers: config load/save, CSV rotation logic, archive pruning,
 dependency validation, alert formatters, protected-process guards, spike
 detection, cooldown gating, mute-list suppression, snooze, oscillation dedup,
 janitor scanning rules, parent-name caching, and the GPU/CPU probe-chain
@@ -242,6 +302,7 @@ keeps running.
 | Live chart | ✅ | ✅ | ✅ |
 | Spike toasts | ✅ | ✅ | ✅ |
 | **`conhost.exe` Janitor** | ✅ | n/a (no conhost) | n/a |
+| **Ghost Sweeper** | ✅ | ✅ | ✅ |
 | **Desktop shortcut installer** | ✅ (`.lnk` via PowerShell) | ✅ (`.desktop` file) | Manual hint printed |
 | `Start-Monitor-Hidden.vbs` | ✅ | n/a (use `python monitor.py`) | n/a |
 
