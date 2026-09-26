@@ -1,30 +1,99 @@
 # PulseDeck — Real-time System Performance Monitor
 
-> A lightweight Python desktop monitor that watches your CPU, RAM, disk, GPU, network,
-> battery, and temperatures in real time. Detects load spikes and surfaces the actual
-> culprits — with a safe, confirmation-only kill button. Designed to run quietly in the
-> background without weighing the machine down.
+**[English](#english)** · **[עברית](#עברית)**
 
 ![Built with Python](https://img.shields.io/badge/python-3.10%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Platforms](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-lightgrey)
 
 ---
 
-## Why this exists
+## English
 
-Windows Task Manager is great when you're already in trouble. PulseDeck is for the
-30 seconds **before** that — when your machine starts to stutter and you want to know,
-without clicking, *what's actually eating the CPU right now*.
+### What it does
 
-Three core promises:
+PulseDeck is a slim strip that sits just above your taskbar and shows, every
+second, how hard your computer is working: CPU, RAM, disk, network, GPU,
+temperatures and battery. When something suddenly eats the machine, it tells
+you **who** — and lets you close it with one confirmed click.
 
-1. **Real-time data** — second-by-second sampling, written to a CSV you can analyse later.
-2. **Spike alerts** — when CPU/RAM jumps sharply, a gentle bottom-right toast shows the
-   top processes responsible. Click for a full window with Kill buttons.
-3. **Low overhead** — adaptive sampling (slows down when idle), batched `psutil` calls,
-   incremental CSV reads in the live chart. Typical footprint: ~80 MB RAM, well under
-   1% CPU on modern hardware.
+### What it solves
+
+- **"Why is my computer slow right now?"** Task Manager answers that once
+  you are already stuck. PulseDeck shows the load the moment it starts, and a
+  small pop-up names the processes behind a spike.
+- **Programs that finished but never left.** Dev servers, terminals and AI
+  coding agents often leave processes behind that quietly hold memory for
+  days. The *Ghost Sweeper* finds them, explains each one in plain words
+  (who started it, how long it has been abandoned, whether it is finished or
+  stuck), and a **🧹 Clean all** button closes everything idle — never
+  anything active.
+- **"What happened yesterday at 3 am?"** Every second is logged, spikes get a
+  readable daily report, and a freeze log records what the app was doing if
+  it ever hangs, so problems can be understood weeks later.
+
+### How it works
+
+Python + `psutil` read the numbers; Tkinter draws the strip, the panels and
+the live chart. Anything slow (scanning processes, reading GPU sensors) runs
+in the background so the strip never freezes. It **never closes anything by
+itself** — every close is your decision, system processes are protected, and
+passwords that appear in command lines are masked. Typical footprint: about
+90 MB of RAM and ~1 % CPU. The interface speaks English or Hebrew, following
+your Windows language.
+
+### A word about the looks
+
+Zero design budget went into PulseDeck. The colours were picked by a
+developer, which explains a lot. If it hurts your eyes, you are warmly
+invited to redesign it however you like — new colours, fonts or a whole new
+look are all welcome as pull requests.
+
+---
+
+<div dir="rtl">
+
+## עברית
+
+### מה זה עושה
+
+‏PulseDeck הוא פס דק שיושב מעל שורת המשימות ומראה, בכל שנייה, כמה המחשב
+עובד קשה: מעבד, זיכרון, דיסק, רשת, כרטיס מסך, טמפרטורות וסוללה. כשמשהו פתאום
+"אוכל" את המחשב, הוא אומר לכם **מי** — ומאפשר לסגור אותו בלחיצה אחת עם אישור.
+
+### מה זה פותר
+
+- **"למה המחשב איטי עכשיו?"** מנהל המשימות עונה על זה כשכבר נתקעתם. ‏PulseDeck
+  מראה את העומס ברגע שהוא מתחיל, וחלונית קטנה מציגה מי התהליכים שגרמו לו.
+- **תוכנות שסיימו ולא הלכו.** שרתי פיתוח, טרמינלים וסוכני AI לכתיבת קוד משאירים
+  הרבה פעמים תהליכים שממשיכים לתפוס זיכרון בשקט במשך ימים. "סורק הרפאים" מוצא
+  אותם, מסביר כל אחד בשפה פשוטה (מי הפעיל אותו, כמה זמן הוא נטוש, האם סיים או
+  נתקע), וכפתור **🧹 נקה הכל** סוגר את כל מה שלא פעיל — ואף פעם לא משהו פעיל.
+- **"מה קרה אתמול בשלוש בלילה?"** כל שנייה נשמרת, כל חריגה מקבלת דוח יומי קריא,
+  ויומן קפיאות רושם מה התוכנה עשתה אם היא נתקעה — כך שאפשר להבין בעיות גם שבועות
+  אחר כך.
+
+### איך זה עובד
+
+‏Python ו-`psutil` קוראים את המספרים, ו-Tkinter מצייר את הפס, החלונות והגרף החי.
+כל מה שאיטי (סריקת תהליכים, קריאת חיישני כרטיס המסך) רץ ברקע, כך שהפס לא נתקע.
+הוא **אף פעם לא סוגר שום דבר לבד** — כל סגירה היא החלטה שלכם, תהליכי מערכת
+מוגנים, וסיסמאות שמופיעות בשורות פקודה מוסתרות. צריכה רגילה: בערך 90MB זיכרון
+וכ-1% מעבד. הממשק בעברית או באנגלית, לפי שפת Windows.
+
+### מילה על העיצוב
+
+בעיצוב של PulseDeck הושקעו בדיוק אפס שקלים ואפס דקות. את הצבעים בחר מתכנת, וזה
+מסביר הרבה. אם זה כואב לכם בעיניים — אתם מוזמנים בחום לעצב אותו איך שבא לכם:
+צבעים, גופנים או מראה חדש לגמרי. ‏Pull requests יתקבלו בשמחה.
+
+### התקנה
+
+ב-Windows: מורידים את התיקייה ולוחצים פעמיים על `Install.bat`. הוא מוצא את Python,
+מתקין את מה שצריך ויוצר קיצור בשם PulseDeck על שולחן העבודה. הפירוט המלא (באנגלית)
+נמצא בהמשך.
+
+</div>
 
 ---
 
