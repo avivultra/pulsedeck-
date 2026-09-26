@@ -62,12 +62,20 @@ class WindowsWmiProbe(CPUTempProbe):
     and certain motherboards. Tolerates failure silently."""
     name = "windows-wmi"
 
+    # An empty answer is WMI saying "this machine has no such sensor" — it will
+    # not appear later in the session. After this many, stop spawning
+    # PowerShell altogether. Timeouts do not count: those can be transient.
+    GIVE_UP_AFTER_EMPTY = 3
+
+    def __init__(self) -> None:
+        self._empty_answers = 0
+
     def is_available(self) -> bool:
-        return os.name == "nt"
+        return os.name == "nt" and self._empty_answers < self.GIVE_UP_AFTER_EMPTY
 
     def read(self) -> float | None:
+        import subprocess
         try:
-            import subprocess
             flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             proc = subprocess.run(
                 [
@@ -79,12 +87,21 @@ class WindowsWmiProbe(CPUTempProbe):
                 capture_output=True, text=True, timeout=4,
                 creationflags=flags,
             )
+        except subprocess.TimeoutExpired:
+            # A busy machine, not a missing sensor. Used to escape as an
+            # exception and fill monitor.log with "CPU probe windows-wmi raised".
+            log.debug("WMI temperature query timed out")
+            return None
         except (OSError, FileNotFoundError):
             return None
         if proc.returncode != 0:
             return None
         raw = (proc.stdout or "").strip().replace(",", ".")
         if not raw:
+            self._empty_answers += 1
+            if self._empty_answers == self.GIVE_UP_AFTER_EMPTY:
+                log.info("WMI exposes no CPU temperature sensor on this machine; "
+                         "not asking again this session")
             return None
         try:
             kelvin_tenths = float(raw)

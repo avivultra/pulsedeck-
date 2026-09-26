@@ -34,7 +34,9 @@ log = logging.getLogger(__name__)
 
 # Base refresh intervals. Sensors don't change fast enough to justify less.
 _CPU_TTL_SEC = 8.0
-_GPU_TTL_SEC = 10.0
+# Each GPU read spawns nvidia-smi (~20–40 ms of process start-up). GPU
+# temperature moves slowly, so the dock does not need it more often than this.
+_GPU_TTL_SEC = 30.0
 
 # Backoff for probes that keep failing: after this many consecutive failures
 # the effective TTL doubles per extra failure, capped at _MAX_BACKOFF_SEC.

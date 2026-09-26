@@ -22,10 +22,13 @@ RAM_JUMP_FLOOR = 80.0    # only alert if curr RAM >= 80% after the jump
 CPU_HIGH_ABS = 88.0
 RAM_HIGH_ABS = 92.0
 
-# Dedup oscillation: when CPU swings up→down→up within this window, log only
-# the first event (the rest is noise from a single underlying spike).
-_OSCILLATION_WINDOW_SEC = 30.0
-_last_event: dict = {"timestamp": 0.0, "direction": ""}  # module-level state
+# One entry per load episode. While CPU stays above CPU_HIGH_ABS the
+# sustained-high rule matches on EVERY tick; without this gate the reporter
+# wrote an entry — and walked the whole process table on the dock's Tk thread —
+# once per second. On 2026-09-20 that was 2,002 entries in a day, and under
+# 100 % CPU the dock starved itself until Windows killed it as "not responding".
+_MIN_ENTRY_INTERVAL_SEC = 60.0
+_last_event: dict = {"timestamp": 0.0}  # module-level state (monotonic clock)
 
 
 def _fmt_mib(rss: int) -> str:
@@ -33,6 +36,25 @@ def _fmt_mib(rss: int) -> str:
 
 
 def _top_by_rss(limit: int = 8) -> list[tuple[str, int]]:
+    """Top processes by RSS, preferring the background sampler's snapshot.
+
+    The sampler already walks the process table on its own thread; reusing its
+    list keeps this call — which runs on the dock's Tk thread — a sort, not a
+    scan. Falls back to a direct scan only when no sampler is running
+    (console mode, tests).
+    """
+    try:
+        from process_monitor import peek_default_sampler
+        sampler = peek_default_sampler()
+        cached = sampler.top_by_rss(limit) if sampler is not None else []
+    except Exception:
+        cached = []
+    if cached:
+        return [(p.name[:48], p.rss_bytes) for p in cached]
+    return _scan_top_by_rss(limit)
+
+
+def _scan_top_by_rss(limit: int = 8) -> list[tuple[str, int]]:
     rows: list[tuple[str, int, int]] = []
     for p in psutil.process_iter(["pid", "name", "memory_info"]):
         try:
@@ -123,19 +145,12 @@ def maybe_append_spike_report(prev: Snapshot, curr: Snapshot, report_path: Path)
     from datetime import datetime as _dt
     import time as _time
 
-    # Oscillation dedup: if this event is the reverse of the previous one
-    # within the window, treat it as part of the same spike and skip.
+    # One entry per episode — see _MIN_ENTRY_INTERVAL_SEC.
     now_mono = _time.monotonic()
-    direction = "up" if "עלה" in reason else ("down" if "ירד" in reason else "")
-    if direction and _last_event["direction"]:
-        elapsed = now_mono - _last_event["timestamp"]
-        opposite = (direction == "up" and _last_event["direction"] == "down") or \
-                   (direction == "down" and _last_event["direction"] == "up")
-        if opposite and elapsed < _OSCILLATION_WINDOW_SEC:
-            # Same spike — don't double-log
-            return
+    last = _last_event.get("timestamp", 0.0)
+    if last and now_mono - last < _MIN_ENTRY_INTERVAL_SEC:
+        return
     _last_event["timestamp"] = now_mono
-    _last_event["direction"] = direction or _last_event["direction"]
 
     p = Path(report_path)
     if p.suffix == "" or p.is_dir():

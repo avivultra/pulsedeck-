@@ -15,6 +15,8 @@ from pathlib import Path
 
 import psutil
 
+import freeze_watch
+
 log = logging.getLogger(__name__)
 
 from monitor import HistoryLogger, collect_snapshot, disk_root_path, format_gib_usage, spike_reports_enabled
@@ -273,6 +275,7 @@ def run_dock_main(args: object) -> None:
             return
         closing = True
         stop.set()
+        freeze_watch.stop()
         if tray_icon is not None:
             try:
                 tray_icon.stop()  # type: ignore[attr-defined]
@@ -392,6 +395,7 @@ def run_dock_main(args: object) -> None:
         if stop.is_set() or closing:
             root.after(0, on_close)
             return
+        freeze_watch.beat()
         snap = collect_snapshot(disk_path)
         history.log(snap)
 
@@ -501,6 +505,8 @@ def run_dock_main(args: object) -> None:
         root.after(interval_ms, tick)
 
     place_window()
+    from metric_history import DEFAULT_HISTORY_DIR
+    freeze_watch.start(DEFAULT_HISTORY_DIR / "freeze.log")
     root.after(100, tick)
     root.protocol("WM_DELETE_WINDOW", on_close)
     root.mainloop()

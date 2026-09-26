@@ -21,6 +21,7 @@ class ProcessInfo:
     rss_bytes: int
     process_uptime_seconds: float       # how long the process has been running
     last_active_seconds_ago: float | None  # None == not seen active since sampler start
+    observed_seconds: float = 0.0       # how long this sampler has been watching it
 
     @property
     def is_active_now(self) -> bool:
@@ -51,6 +52,7 @@ class ProcessSampler:
         # Per-PID activity bookkeeping
         self._last_active: dict[int, float] = {}
         self._create_time: dict[int, float] = {}
+        self._first_seen: dict[int, float] = {}
         self._primed: set[int] = set()  # PIDs that had cpu_percent primed already
 
     def notify_activity(self) -> None:
@@ -110,6 +112,7 @@ class ProcessSampler:
                 # but the very first reading is always 0. Skip until next tick.
                 if pid not in self._primed:
                     self._primed.add(pid)
+                    self._first_seen[pid] = now
                     ct = info.get("create_time")
                     if ct is not None:
                         self._create_time[pid] = float(ct)
@@ -141,6 +144,7 @@ class ProcessSampler:
                     rss_bytes=rss,
                     process_uptime_seconds=uptime,
                     last_active_seconds_ago=last_active_ago,
+                    observed_seconds=max(0.0, now - self._first_seen.get(pid, now)),
                 ))
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
@@ -151,6 +155,7 @@ class ProcessSampler:
             self._primed.discard(pid)
             self._last_active.pop(pid, None)
             self._create_time.pop(pid, None)
+            self._first_seen.pop(pid, None)
 
         with self._lock:
             self._snapshot = live
@@ -158,6 +163,10 @@ class ProcessSampler:
     def _snapshot_copy(self) -> list[ProcessInfo]:
         with self._lock:
             return list(self._snapshot)
+
+    def snapshot(self) -> list[ProcessInfo]:
+        """Every process from the last tick (a copy; safe from any thread)."""
+        return self._snapshot_copy()
 
     def top_by_cpu(self, n: int = 5) -> list[ProcessInfo]:
         snap = self._snapshot_copy()
@@ -181,6 +190,11 @@ def get_default_sampler() -> ProcessSampler:
             _default_sampler = ProcessSampler()
             _default_sampler.start()
         return _default_sampler
+
+
+def peek_default_sampler() -> ProcessSampler | None:
+    """The running sampler, or None. Never creates or starts one."""
+    return _default_sampler
 
 
 def sample_now(refresh_wait: float = 1.0) -> tuple[list[ProcessInfo], list[ProcessInfo]]:

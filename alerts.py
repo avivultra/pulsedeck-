@@ -100,6 +100,61 @@ class AlertEvent:
     timestamp: float = field(default_factory=time.time)
 
 
+def _still_running(pid: int, create_time: float | None) -> bool:
+    """True if `pid` is alive AND is still the same process (no PID reuse)."""
+    try:
+        proc = psutil.Process(pid)
+        if not proc.is_running():
+            return False
+        if create_time is not None and abs(proc.create_time() - create_time) > 1.0:
+            return False
+        return proc.status() != psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return False
+    except psutil.AccessDenied:
+        return True
+
+
+def terminate_process(pid: int, name: str, create_time: float | None = None,
+                      timeout: float = 3.0) -> str:
+    """Terminate one process, no UI. Blocks up to 2×timeout — never call it
+    on the Tk thread for more than one process.
+
+    Returns one of: "closed", "already_gone", "protected", "pid_reused",
+    "denied".
+
+    `create_time` guards against PID reuse: if given and the live PID started
+    at a different time, it is a different process and is left alone.
+    """
+    if _is_protected(pid, name):
+        return "protected"
+    try:
+        proc = psutil.Process(pid)
+        if create_time is not None and abs(proc.create_time() - create_time) > 1.0:
+            return "pid_reused"
+        proc.terminate()
+        try:
+            proc.wait(timeout=timeout)
+        except psutil.TimeoutExpired:
+            log.warning("Process %s (PID %d) ignored terminate; sending kill", name, pid)
+            proc.kill()
+            proc.wait(timeout=timeout)
+        log.info("Killed process %s (PID %d)", name, pid)
+        return "closed"
+    except psutil.NoSuchProcess:
+        return "already_gone"
+    except (psutil.AccessDenied, psutil.TimeoutExpired, OSError):
+        # Windows often lets us terminate a process but not wait on it (the
+        # wait needs SYNCHRONIZE access). That used to be logged as "Failed
+        # to kill" although the process was gone. Ask the OS what is true.
+        if not _still_running(pid, create_time):
+            log.info("Killed process %s (PID %d); wait was denied but it is gone",
+                     name, pid)
+            return "closed"
+        log.warning("Could not kill %s (PID %d): access denied", name, pid)
+        return "denied"
+
+
 def try_terminate(pid: int, name: str, parent: tk.Misc | None) -> bool:
     if _is_protected(pid, name):
         messagebox.showerror(
@@ -114,29 +169,19 @@ def try_terminate(pid: int, name: str, parent: tk.Misc | None) -> bool:
         parent=parent,
     ):
         return False
-    try:
-        proc = psutil.Process(pid)
-        proc.terminate()
-        try:
-            proc.wait(timeout=3)
-        except psutil.TimeoutExpired:
-            log.warning("Process %s (PID %d) ignored terminate; sending kill", name, pid)
-            proc.kill()
-            proc.wait(timeout=3)
-        log.info("Killed process %s (PID %d)", name, pid)
+    outcome = terminate_process(pid, name)
+    if outcome == "closed":
         return True
-    except psutil.NoSuchProcess:
+    if outcome == "already_gone":
         messagebox.showinfo("התהליך כבר אינו רץ",
                             f"{name} (PID {pid}) הסתיים בעצמו.", parent=parent)
         return True
-    except (psutil.AccessDenied, OSError) as exc:
-        log.exception("Failed to kill %s (PID %d)", name, pid)
-        messagebox.showerror(
-            "כשל בהרג תהליך",
-            f"לא הצלחתי להרוג את {name} (PID {pid}).\n{exc}\n\nאולי דרושות הרשאות מנהל.",
-            parent=parent,
-        )
-        return False
+    messagebox.showerror(
+        "כשל בהרג תהליך",
+        f"לא הצלחתי להרוג את {name} (PID {pid}).\n\nאולי דרושות הרשאות מנהל.",
+        parent=parent,
+    )
+    return False
 
 
 def _open_task_manager() -> None:

@@ -511,8 +511,9 @@ class TestPerformanceAndUx(unittest.TestCase):
         )
         self.assertTrue(alerts_mod._is_top_mostly_muted(event, d._muted))
 
-    def test_spike_dedup_oscillation(self) -> None:
-        # Two opposite events within 30s should produce only one md entry
+    def test_spike_one_entry_per_episode(self) -> None:
+        # Sustained 100% CPU matches on every tick; it must produce one entry
+        # per minute, not one per second (the 2026-09-20 freeze).
         import time as _t
         import spike_reporter
         from monitor import Snapshot
@@ -527,17 +528,38 @@ class TestPerformanceAndUx(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             spike_dir = Path(d)
             # Reset module-level dedup state
-            spike_reporter._last_event = {"timestamp": 0.0, "direction": ""}
-            # First event: CPU up
-            spike_reporter.maybe_append_spike_report(snap(10, 50), snap(70, 50), spike_dir)
-            # Second event 1s later: CPU down (opposite direction within window)
-            spike_reporter.maybe_append_spike_report(snap(70, 50), snap(20, 50), spike_dir)
-            # Should be exactly one ## heading in the file
+            spike_reporter._last_event = {"timestamp": 0.0}
             today = datetime.now().strftime("%Y-%m-%d")
             f = spike_dir / f"spikes-{today}.md"
-            content = f.read_text(encoding="utf-8")
-            heading_count = content.count("## ⚠")
-            self.assertEqual(heading_count, 1)
+            # A jump into load, then five ticks of sustained 100%.
+            spike_reporter.maybe_append_spike_report(snap(10, 50), snap(70, 50), spike_dir)
+            for _ in range(5):
+                spike_reporter.maybe_append_spike_report(snap(99, 50), snap(100, 50), spike_dir)
+            self.assertEqual(f.read_text(encoding="utf-8").count("## ⚠"), 1)
+            # A minute later the same episode may be reported again.
+            spike_reporter._last_event["timestamp"] = (
+                _t.monotonic() - spike_reporter._MIN_ENTRY_INTERVAL_SEC - 1)
+            spike_reporter.maybe_append_spike_report(snap(99, 50), snap(100, 50), spike_dir)
+            self.assertEqual(f.read_text(encoding="utf-8").count("## ⚠"), 2)
+
+    def test_spike_top_list_uses_sampler_cache(self) -> None:
+        # On the Tk thread the top-RSS list must come from the sampler's
+        # snapshot, never from a fresh walk of the process table.
+        from unittest import mock
+        import process_monitor
+        import spike_reporter
+        from process_monitor import ProcessInfo
+
+        fake = mock.Mock()
+        fake.top_by_rss.return_value = [
+            ProcessInfo(pid=1, name="big.exe", cpu_percent=0, cpu_percent_raw=0,
+                        rss_bytes=900 * 1024 * 1024, process_uptime_seconds=1,
+                        last_active_seconds_ago=None)]
+        with mock.patch.object(process_monitor, "_default_sampler", fake), \
+             mock.patch.object(spike_reporter, "_scan_top_by_rss") as scan:
+            top = spike_reporter._top_by_rss(8)
+        scan.assert_not_called()
+        self.assertEqual(top, [("big.exe", 900 * 1024 * 1024)])
 
 
 class TestProbeChains(unittest.TestCase):

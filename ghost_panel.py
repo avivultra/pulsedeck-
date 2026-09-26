@@ -35,6 +35,187 @@ BG, PANEL, PANEL_HI = "#0d1117", "#161b22", "#1c2230"
 BORDER, FG, DIM = "#30363d", "#e6edf3", "#7d8590"
 BAD, MUTED_BTN = "#ff5c6c", "#2d333b"
 GHOST = "#a78bfa"          # the sweeper's signature violet
+CLEAN = "#3fb950"          # "clean all" green
+OK_FG, WARN_FG = "#3fb950", "#f0c674"
+
+
+def _run_in_background(win, work, on_done) -> None:
+    """Run `work()` on a thread; deliver its result (or exception) to
+    `on_done` on the Tk thread. Tk must only be touched from the thread that
+    created it, so the hand-off is a polled slot, not a call from the worker."""
+    import threading
+
+    slot: list = []
+
+    def _worker() -> None:
+        try:
+            slot.append(work())
+        except BaseException as exc:          # delivered to the UI, not lost
+            log.exception("Background task failed")
+            slot.append(exc)
+
+    threading.Thread(target=_worker, name="ghost-panel-task", daemon=True).start()
+
+    def _poll() -> None:
+        if slot:
+            try:
+                on_done(slot[0])
+            except Exception:
+                # Typically the window was closed while the task ran.
+                log.debug("Background task result arrived after its window closed",
+                          exc_info=True)
+            return
+        try:
+            win.after(100, _poll)
+        except Exception:
+            pass                                # window closed meanwhile
+
+    win.after(100, _poll)
+
+
+def _open_clean_dialog(parent, ghosts, hogs, note: str, claude_note: str,
+                       *, on_finished) -> None:
+    """Confirm window for 'clean all': every item is listed and can be
+    unticked; nothing closes until the user presses the button."""
+    import tkinter as tk
+
+    from idle_cleanup import MIB, close_targets, verify_idle
+
+    dlg = tk.Toplevel(parent)
+    dlg.title("נקה הכל — רק מה שלא פעיל")
+    dlg.geometry("640x560")
+    dlg.configure(bg=BG)
+    try:
+        dlg.attributes("-topmost", True)
+    except tk.TclError:
+        pass
+    dlg.transient(parent)
+
+    hdr = tk.Frame(dlg, bg=PANEL, padx=16, pady=10)
+    hdr.pack(fill="x")
+    tk.Label(hdr, text="🧹 נקה הכל — רק מה שלא פעיל", bg=PANEL, fg=CLEAN,
+             font=("Segoe UI", 13, "bold"), anchor="e").pack(fill="x")
+    tk.Label(hdr, text="מה שפעיל לא מופיע כאן בכלל. לפני הסגירה כל תהליך נבדק "
+                       "שוב, ומה שהתעורר בינתיים — לא ייסגר.",
+             bg=PANEL, fg=DIM, font=("Segoe UI", 9), anchor="e",
+             justify="right", wraplength=600).pack(fill="x", pady=(3, 0))
+
+    holder = tk.Frame(dlg, bg=BG)
+    holder.pack(fill="both", expand=True)
+    canvas = tk.Canvas(holder, bg=BG, highlightthickness=0, bd=0)
+    bar = tk.Scrollbar(holder, orient="vertical", command=canvas.yview)
+    body = tk.Frame(canvas, bg=BG)
+    body.bind("<Configure>", lambda _e: canvas.configure(scrollregion=canvas.bbox("all")))
+    canvas.create_window((0, 0), window=body, anchor="nw", width=600)
+    canvas.configure(yscrollcommand=bar.set)
+    canvas.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=6)
+    bar.pack(side="right", fill="y")
+
+    checks: list[tuple[tk.BooleanVar, object]] = []
+    summary_var = tk.StringVar()
+
+    def _update_summary() -> None:
+        chosen = [t for v, t in checks if v.get()]
+        mb = sum(t.rss_bytes for t in chosen) // MIB
+        summary_var.set(f"נבחרו {len(chosen)}  ·  ישתחררו כ-{mb:,} MB")
+        go_btn.config(state="normal" if chosen else "disabled",
+                      text=f"סגור את המסומנים ({len(chosen)})")
+
+    def _section(title: str, items) -> None:
+        if not items:
+            return
+        tk.Label(body, text=title, bg=BG, fg=FG, font=("Segoe UI", 10, "bold"),
+                 anchor="e").pack(fill="x", pady=(8, 2), padx=6)
+        for t in items:
+            var = tk.BooleanVar(value=True)
+            checks.append((var, t))
+            row = tk.Frame(body, bg=PANEL_HI, padx=10, pady=5)
+            row.pack(fill="x", pady=2, padx=4)
+            tk.Checkbutton(row, variable=var, command=_update_summary,
+                           bg=PANEL_HI, activebackground=PANEL_HI,
+                           selectcolor=PANEL, relief="flat", bd=0,
+                           highlightthickness=0).pack(side="right")
+            tk.Label(row, text=f"{t.name}  ·  {t.rss_bytes // MIB:,} MB  ·  PID {t.pid}",
+                     bg=PANEL_HI, fg=FG, font=("Segoe UI", 10, "bold"),
+                     anchor="e").pack(side="top", fill="x")
+            tk.Label(row, text=t.detail, bg=PANEL_HI, fg=DIM, font=("Segoe UI", 8),
+                     anchor="e", justify="right", wraplength=540
+                     ).pack(side="top", fill="x")
+
+    _section("👻 תהליכים נטושים שסיימו", ghosts)
+    _section("💤 תופסים זיכרון ולא פעילים", hogs)
+    if not ghosts and not hogs:
+        tk.Label(body, text="✓ אין כרגע שום דבר לא פעיל שכדאי לסגור",
+                 bg=BG, fg=OK_FG, font=("Segoe UI", 11), pady=24).pack(fill="x")
+    for text in (note, claude_note):
+        if text:
+            tk.Label(body, text=text, bg=BG, fg=DIM, font=("Segoe UI", 8),
+                     anchor="e", justify="right", wraplength=580
+                     ).pack(fill="x", pady=(8, 0), padx=6)
+
+    ftr = tk.Frame(dlg, bg=PANEL, padx=14, pady=10)
+    ftr.pack(fill="x", side="bottom")
+    tk.Label(ftr, textvariable=summary_var, bg=PANEL, fg=DIM,
+             font=("Segoe UI", 9), anchor="e").pack(side="top", fill="x", pady=(0, 6))
+    go_btn = tk.Button(ftr, bg=BAD, fg="white", font=("Segoe UI", 10, "bold"),
+                       relief="flat", bd=0, cursor="hand2", padx=14, pady=6,
+                       activebackground="#d94452", activeforeground="white")
+    go_btn.pack(side="left")
+    cancel_btn = tk.Button(ftr, text="ביטול", bg=PANEL_HI, fg=FG,
+                           font=("Segoe UI", 9), relief="flat", bd=0,
+                           cursor="hand2", padx=12, pady=6, command=dlg.destroy)
+    cancel_btn.pack(side="right")
+
+    def _show_results(result) -> None:
+        for child in body.winfo_children():
+            child.destroy()
+        cancel_btn.config(text="סגור")
+        if isinstance(result, BaseException):
+            summary_var.set(f"הניקוי נכשל: {result}")
+            return
+        closed, skipped = result
+        done = [t for t, outcome in closed if outcome in ("closed", "already_gone")]
+        failed = [(t, o) for t, o in closed if o not in ("closed", "already_gone")]
+        mb = sum(t.rss_bytes for t in done) // MIB
+        summary_var.set(f"✓ נסגרו {len(done)}  ·  שוחררו כ-{mb:,} MB")
+        for t in done:
+            tk.Label(body, text=f"✓ {t.name} (PID {t.pid}) — נסגר",
+                     bg=BG, fg=OK_FG, font=("Segoe UI", 9), anchor="e"
+                     ).pack(fill="x", padx=6)
+        for t, why in skipped:
+            tk.Label(body, text=f"⏸ {t.name} (PID {t.pid}) — לא נסגר: {why}",
+                     bg=BG, fg=WARN_FG, font=("Segoe UI", 9), anchor="e"
+                     ).pack(fill="x", padx=6)
+        for t, outcome in failed:
+            why = {"denied": "אין הרשאה (דרוש מנהל)",
+                   "protected": "תהליך מוגן",
+                   "pid_reused": "המספר עבר לתהליך אחר"}.get(outcome, outcome)
+            tk.Label(body, text=f"✕ {t.name} (PID {t.pid}) — {why}",
+                     bg=BG, fg=BAD, font=("Segoe UI", 9), anchor="e"
+                     ).pack(fill="x", padx=6)
+        on_finished()
+
+    def _go() -> None:
+        chosen = [t for v, t in checks if v.get()]
+        if not chosen:
+            return
+        go_btn.config(state="disabled", text="בודק…")
+        cancel_btn.config(state="disabled")
+        summary_var.set("מוודא שכל תהליך עדיין לא פעיל (3 שניות)…")
+
+        def _work():
+            ok, skipped = verify_idle(chosen)
+            return close_targets(ok), skipped
+
+        def _done(result) -> None:
+            cancel_btn.config(state="normal")
+            go_btn.pack_forget()
+            _show_results(result)
+
+        _run_in_background(dlg, _work, _done)
+
+    go_btn.config(command=_go)
+    _update_summary()
 
 
 def _fmt_clock(unix_time: float) -> str:
@@ -307,6 +488,38 @@ def open_ghost_panel(parent) -> object:
               font=("Segoe UI", 10, "bold"), relief="flat", bd=0,
               activebackground="#8b6fe8", activeforeground=BG,
               cursor="hand2", padx=14, pady=6, command=_rescan).pack(side="left")
+
+    clean_btn = tk.Button(ftr, text="🧹 נקה הכל", bg=PANEL_HI, fg=CLEAN,
+                          font=("Segoe UI", 10, "bold"), relief="flat", bd=0,
+                          activebackground=CLEAN, activeforeground=BG,
+                          cursor="hand2", padx=14, pady=6)
+    clean_btn.pack(side="left", padx=(8, 0))
+
+    def _clean_all() -> None:
+        clean_btn.config(state="disabled", text="🧹 בודק…")
+
+        def _gather():
+            from idle_cleanup import (claude_sessions_note, ghost_targets,
+                                      idle_hog_targets)
+            from process_monitor import peek_default_sampler
+            ghosts = ghost_targets(sweeper.get_ghosts())
+            taken = {t.pid for t in ghosts}
+            hogs, note = idle_hog_targets(peek_default_sampler(), exclude_pids=taken)
+            return ghosts, hogs, note, claude_sessions_note(taken)
+
+        def _done(result) -> None:
+            clean_btn.config(state="normal", text="🧹 נקה הכל")
+            if isinstance(result, BaseException):
+                messagebox.showerror("נקה הכל", f"החיפוש נכשל:\n{result}", parent=win)
+                return
+            _open_clean_dialog(win, *result, on_finished=_after_clean)
+
+        _run_in_background(win, _gather, _done)
+
+    def _after_clean() -> None:
+        _run_in_background(win, sweeper.trigger_rescan, lambda _r: _refresh())
+
+    clean_btn.config(command=_clean_all)
 
     def _toggle_redaction() -> None:
         set_secrets_redacted(redact_var.get())

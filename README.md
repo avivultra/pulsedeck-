@@ -95,6 +95,19 @@ Three core promises:
   the panel turns it off and on, and the choice persists. The toggle governs
   the screen; anything written to `history/sweeper.log` is masked
   unconditionally
+- **🧹 Clean all** — one button, in addition to the per-card close buttons,
+  that closes everything **provably idle and nothing active**:
+  - ghosts judged *finished* (never *stuck*, *leaking* or *still working*)
+  - idle memory hogs: your own processes holding ≥ 100 MB that have not used
+    ≥ 1 % of a core for 5 minutes, with no window on screen (their own or a
+    parent's), no network activity, outside `C:\Windows`, and not security
+    software, sync clients, password managers or dev runtimes. Same-name
+    children (browser helpers) are judged together with their parent
+  - every item is listed with its RAM and can be unticked; after you confirm,
+    each one is **re-sampled for 3 seconds** and anything that woke up is
+    skipped and reported, not closed
+  - open Claude Code sessions are never offered as hogs — a session waiting
+    for your next message looks idle but is in use
 
 ### History
 - **CSV log** every second to `history/regular/metrics.csv`
@@ -108,6 +121,10 @@ Three core promises:
   cleaned up". Command lines are **always masked here**, regardless of the
   panel's display toggle — a log file outlives the session
 - **Application log** in `history/monitor.log` (rotated, configurable level)
+- **Freeze log** in `history/freeze.log` — if the dock stops responding for
+  30 s, the stack of every thread is written here (via `faulthandler`, which
+  works even when the whole interpreter is stuck). Empty apart from one
+  start-up line per session means no freezes
 
 ---
 
@@ -238,6 +255,15 @@ responsiveness depends on, and it was learned the hard way:
 - **CSV appends are memoised.** Writing one row used to re-`mkdir` the parent,
   `stat` twice and re-read the file header every second. The header check is
   now cached and invalidated only on truncation or rotation.
+- **One spike entry per load episode.** While CPU stayed above 88 % the spike
+  reporter wrote an entry — and walked the whole process table on the UI
+  thread — every second (2,002 entries in one day). Under 100 % CPU the dock
+  starved itself until Windows closed it as "not responding". Entries are now
+  at most one a minute, and the top-process list comes from the background
+  sampler's snapshot instead of a fresh scan.
+- **No PowerShell once WMI says "no sensor".** Three empty answers and the WMI
+  temperature probe stops for the session; timeouts no longer escape as
+  errors. `nvidia-smi` runs every 30 s instead of 10 s.
 
 Measured on the development machine, the per-tick data collection went from
 recurring 400–900 ms stalls to a **median of 4.6 ms, p95 8 ms**.
@@ -255,7 +281,7 @@ Adaptive sampling is the other half:
   handful of processes that actually get flagged — including `username` in the
   bulk `process_iter` alone took a sweep from 1.7 s to 5.2 s
 
-Typical footprint: **~80 MB RAM, < 1 % CPU** on a modern desktop.
+Typical footprint: **~90 MB RAM, ~1 % CPU** (measured on an 8-thread laptop).
 
 ---
 
@@ -265,7 +291,9 @@ Typical footprint: **~80 MB RAM, < 1 % CPU** on a modern desktop.
 pytest
 ```
 
-113 unit tests across `test_monitor.py` and `test_ghost_sweeper.py`.
+138 unit tests across `test_monitor.py`, `test_ghost_sweeper.py` and
+`test_idle_cleanup.py` (clean-all never offers or closes anything active,
+terminate outcomes, the freeze log, the WMI give-up).
 
 `test_ghost_sweeper.py` covers the sweeper (parent resolution under PID reuse,
 verdict classification, first-sighting estimates, cross-scan stability of
