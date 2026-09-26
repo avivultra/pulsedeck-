@@ -14,6 +14,9 @@ from dataclasses import dataclass
 
 import psutil
 
+import i18n
+from i18n import tr
+
 log = logging.getLogger(__name__)
 
 # Well-known dev/server ports → friendly hint shown next to the name
@@ -132,7 +135,7 @@ def open_servers_panel(parent) -> "object":
     GREEN, BAD, BLUE = "#3fb950", "#ff5c6c", "#58a6ff"
 
     win = tk.Toplevel(parent) if parent is not None else tk.Tk()
-    win.title("שרתים פתוחים")
+    win.title(tr("שרתים פתוחים", "Open servers"))
     win.geometry("620x480")
     win.configure(bg=BG)
     try:
@@ -142,11 +145,11 @@ def open_servers_panel(parent) -> "object":
 
     hdr = tk.Frame(win, bg=PANEL, padx=18, pady=12)
     hdr.pack(fill="x")
-    tk.Label(hdr, text="🌐 שרתים פתוחים במחשב", bg=PANEL, fg=BLUE,
-             font=("Segoe UI", 14, "bold"), anchor="e").pack(fill="x")
-    subtitle_var = tk.StringVar(value="סורק…")
+    tk.Label(hdr, text=tr("🌐 שרתים פתוחים במחשב", "🌐 Open servers on this PC"), bg=PANEL, fg=BLUE,
+             font=("Segoe UI", 14, "bold"), anchor=i18n.ANCHOR()).pack(fill="x")
+    subtitle_var = tk.StringVar(value=tr("סורק…", "Scanning…"))
     tk.Label(hdr, textvariable=subtitle_var, bg=PANEL, fg=DIM,
-             font=("Segoe UI", 9), anchor="e").pack(fill="x", pady=(2, 0))
+             font=("Segoe UI", 9), anchor=i18n.ANCHOR()).pack(fill="x", pady=(2, 0))
 
     # Scrollable body
     body_holder = tk.Frame(win, bg=BG)
@@ -171,10 +174,12 @@ def open_servers_panel(parent) -> "object":
             child.destroy()
         servers = scan_listening_servers()
         subtitle_var.set(
-            f"{len(servers)} תהליכים מאזינים לפורטים  ·  לחץ ✕ לכיבוי (עם אישור)"
+            tr(f"{len(servers)} תהליכים מאזינים לפורטים  ·  לחץ ✕ לכיבוי (עם אישור)",
+               f"{len(servers)} processes listening on ports  ·  click ✕ to stop (with confirmation)")
         )
         if not servers:
-            tk.Label(body, text="לא נמצאו שרתים פתוחים (או שנדרשת הרשאת מנהל לסריקה)",
+            tk.Label(body, text=tr("לא נמצאו שרתים פתוחים (או שנדרשת הרשאת מנהל לסריקה)",
+                                    "No open servers found (or scanning needs administrator rights)"),
                      bg=BG, fg=DIM, font=("Segoe UI", 10), pady=30).pack(fill="x")
             return
 
@@ -196,7 +201,7 @@ def open_servers_panel(parent) -> "object":
             tk.Label(top, text=f":{ports_str}", bg=PANEL_HI, fg=GREEN,
                      font=("Cascadia Mono", 11, "bold")).pack(side="left")
             tk.Label(top, text=srv.name, bg=PANEL_HI, fg=FG,
-                     font=("Segoe UI", 11, "bold"), anchor="e"
+                     font=("Segoe UI", 11, "bold"), anchor=i18n.ANCHOR()
                      ).pack(side="right", fill="x", expand=True)
 
             meta_bits = [f"PID {srv.pid}"]
@@ -205,11 +210,11 @@ def open_servers_panel(parent) -> "object":
             if srv.cmdline_hint:
                 meta_bits.append(srv.cmdline_hint)
             tk.Label(content, text="  ·  ".join(meta_bits), bg=PANEL_HI, fg=DIM,
-                     font=("Segoe UI", 9), anchor="e").pack(fill="x", pady=(2, 0))
+                     font=("Segoe UI", 9), anchor=i18n.ANCHOR()).pack(fill="x", pady=(2, 0))
 
             action = tk.Frame(content, bg=PANEL_HI)
             action.pack(fill="x", pady=(5, 0))
-            tk.Button(action, text="✕  כבה שרת", bg=PANEL_HI, fg=BAD,
+            tk.Button(action, text=tr("✕  כבה שרת", "✕  Stop server"), bg=PANEL_HI, fg=BAD,
                       font=("Segoe UI", 9, "bold"), relief="flat", bd=0,
                       activebackground=BAD, activeforeground="white",
                       cursor="hand2", padx=10, pady=2,
@@ -217,10 +222,10 @@ def open_servers_panel(parent) -> "object":
 
     ftr = tk.Frame(win, bg=PANEL, padx=14, pady=10)
     ftr.pack(fill="x", side="bottom")
-    tk.Button(ftr, text="🔄 רענן", bg=PANEL_HI, fg=FG,
+    tk.Button(ftr, text=tr("🔄 רענן", "🔄 Refresh"), bg=PANEL_HI, fg=FG,
               font=("Segoe UI", 9), relief="flat", bd=0, cursor="hand2",
               padx=12, pady=5, command=_refresh).pack(side="left")
-    tk.Button(ftr, text="סגור", bg=PANEL_HI, fg=FG,
+    tk.Button(ftr, text=tr("סגור", "Close"), bg=PANEL_HI, fg=FG,
               font=("Segoe UI", 9), relief="flat", bd=0, cursor="hand2",
               padx=12, pady=5, command=win.destroy).pack(side="right")
 

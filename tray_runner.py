@@ -20,6 +20,8 @@ log = logging.getLogger(__name__)
 from PIL import Image, ImageDraw
 from pystray import Menu, MenuItem
 
+from i18n import tr
+
 from monitor import HistoryLogger, Snapshot, collect_snapshot, disk_root_path, spike_reports_enabled
 
 
@@ -126,11 +128,11 @@ def build_tray_icon(
         icon.stop()
 
     menu = Menu(
-        MenuItem("פתח גרף חי", on_open_chart, default=True),
-        MenuItem("🔔 זיהוי עומס / התראות", on_open_alerts),
-        MenuItem("תיקיית היסטוריה", on_open_folder),
+        MenuItem(tr("פתח גרף חי", "Open live chart"), on_open_chart, default=True),
+        MenuItem(tr("🔔 זיהוי עומס / התראות", "🔔 Load detection / alerts"), on_open_alerts),
+        MenuItem(tr("תיקיית היסטוריה", "History folder"), on_open_folder),
         Menu.SEPARATOR,
-        MenuItem("יציאה", on_quit),
+        MenuItem(tr("יציאה", "Exit"), on_quit),
     )
 
     image = _create_icon_image()
@@ -138,7 +140,7 @@ def build_tray_icon(
         "graph_performance_monitor",
         image,
         menu=menu,
-        title="מוניטור ביצועים",
+        title=tr("מוניטור ביצועים", "Performance Monitor"),
     )
 
 

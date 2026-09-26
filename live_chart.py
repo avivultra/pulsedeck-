@@ -11,6 +11,9 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox, ttk
 
+import i18n
+from i18n import tr
+
 log = logging.getLogger(__name__)
 
 
@@ -34,7 +37,7 @@ def _show_alerts_panel(parent: tk.Misc, events: list[dict]) -> tk.Toplevel:
     """Open a Toplevel listing today's spike events. Click → full alert window.
     Returns the panel widget so callers can hook close events."""
     panel = tk.Toplevel(parent)
-    panel.title("התראות היום")
+    panel.title(tr("התראות היום", "Today's alerts"))
     panel.geometry("520x460")
     panel.configure(bg=BG)
     try:
@@ -46,14 +49,15 @@ def _show_alerts_panel(parent: tk.Misc, events: list[dict]) -> tk.Toplevel:
     hdr = tk.Frame(panel, bg=PANEL, padx=14, pady=10)
     hdr.pack(fill="x")
     today_str = datetime.now().strftime("%Y-%m-%d")
-    tk.Label(hdr, text=f"התראות {today_str}", bg=PANEL, fg=FG,
-             font=("Segoe UI", 12, "bold"), anchor="e").pack(fill="x")
-    tk.Label(hdr, text=f"{len(events)} אירועים היום  ·  לחץ על אירוע לפתיחת פרטים מלאים",
-             bg=PANEL, fg=DIM, font=("Segoe UI", 9), anchor="e").pack(fill="x", pady=(2, 0))
+    tk.Label(hdr, text=tr(f"התראות {today_str}", f"Alerts {today_str}"), bg=PANEL, fg=FG,
+             font=("Segoe UI", 12, "bold"), anchor=i18n.ANCHOR()).pack(fill="x")
+    tk.Label(hdr, text=tr(f"{len(events)} אירועים היום  ·  לחץ על אירוע לפתיחת פרטים מלאים",
+                          f"{len(events)} events today  ·  click an event for full details"),
+             bg=PANEL, fg=DIM, font=("Segoe UI", 9), anchor=i18n.ANCHOR()).pack(fill="x", pady=(2, 0))
     tk.Frame(panel, bg=GRID, height=1).pack(fill="x")
 
     if not events:
-        tk.Label(panel, text="אין התראות היום עדיין",
+        tk.Label(panel, text=tr("אין התראות היום עדיין", "No alerts today yet"),
                  bg=BG, fg=DIM, font=("Segoe UI", 11),
                  pady=40).pack(fill="x")
         return panel
@@ -86,7 +90,10 @@ def _show_alerts_panel(parent: tk.Misc, events: list[dict]) -> tk.Toplevel:
             show_alert_window(evt, panel)
         except Exception:
             log.exception("Failed to open alert window from spike list")
-            messagebox.showerror("שגיאה", "לא הצלחתי לפתוח את חלון ההתראה.", parent=panel)
+            messagebox.showerror(tr("שגיאה", "Error"),
+                                 tr("לא הצלחתי לפתוח את חלון ההתראה.",
+                                    "Could not open the alert window."),
+                                 parent=panel)
 
     # Newest at top
     for ev in reversed(events):
@@ -101,12 +108,12 @@ def _show_alerts_panel(parent: tk.Misc, events: list[dict]) -> tk.Toplevel:
         tk.Label(text_col, text=ev["time"], bg=PANEL, fg=accent,
                  font=("Cascadia Mono", 11, "bold"), anchor="w").pack(anchor="w")
         tk.Label(text_col, text=ev["reason"], bg=PANEL, fg=FG,
-                 font=("Segoe UI", 10), anchor="e",
+                 font=("Segoe UI", 10), anchor=i18n.ANCHOR(),
                  wraplength=420, justify="right").pack(fill="x", pady=(2, 0))
         meta = (f"CPU {ev['cpu_before']:.0f}% → {ev['cpu_after']:.0f}%   ·   "
                 f"RAM {ev['ram_before']:.0f}% → {ev['ram_after']:.0f}%")
         tk.Label(text_col, text=meta, bg=PANEL, fg=DIM,
-                 font=("Segoe UI", 9), anchor="e").pack(fill="x", pady=(2, 0))
+                 font=("Segoe UI", 9), anchor=i18n.ANCHOR()).pack(fill="x", pady=(2, 0))
 
         # Bind click to whole card recursively
         for w in (card, text_col):
@@ -335,7 +342,7 @@ def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
         win: tk.Toplevel | tk.Tk = tk.Tk()
     else:
         win = tk.Toplevel(parent)
-    win.title("גרף ביצועים — חי")
+    win.title(tr("גרף ביצועים — חי", "Performance chart — live"))
     win.geometry("1100x620")
     win.configure(bg=BG)
 
@@ -353,14 +360,14 @@ def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
 
     # Time window options (label, minutes — None = show all)
     WINDOW_OPTIONS: list[tuple[str, int | None]] = [
-        ("5 דקות אחרונות", 5),
-        ("15 דקות אחרונות", 15),
-        ("שעה אחרונה", 60),
-        ("6 שעות אחרונות", 360),
-        ("24 שעות אחרונות", 1440),
-        ("הכל", None),
+        (tr("5 דקות אחרונות", "Last 5 minutes"), 5),
+        (tr("15 דקות אחרונות", "Last 15 minutes"), 15),
+        (tr("שעה אחרונה", "Last hour"), 60),
+        (tr("6 שעות אחרונות", "Last 6 hours"), 360),
+        (tr("24 שעות אחרונות", "Last 24 hours"), 1440),
+        (tr("הכל", "All"), None),
     ]
-    window_label = tk.StringVar(value="15 דקות אחרונות")
+    window_label = tk.StringVar(value=tr("15 דקות אחרונות", "Last 15 minutes"))
 
     def _check(parent_w, text: str, var: tk.BooleanVar) -> tk.Checkbutton:
         return tk.Checkbutton(parent_w, text=text, variable=var,
@@ -370,8 +377,8 @@ def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
                               command=lambda: redraw())
 
     # Right-side title (Hebrew)
-    tk.Label(top, text="גרף ביצועים חי", bg=PANEL, fg=FG,
-             font=("Segoe UI", 11, "bold"), anchor="e").pack(side="right", padx=(8, 0))
+    tk.Label(top, text=tr("גרף ביצועים חי", "Live performance chart"), bg=PANEL, fg=FG,
+             font=("Segoe UI", 11, "bold"), anchor=i18n.ANCHOR()).pack(side=i18n.SIDE(), padx=(8, 0))
 
     # Time window combobox — themed via ttk style
     style = ttk.Style()
@@ -395,7 +402,7 @@ def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
     # Subtle divider before checkboxes
     tk.Frame(top, bg=GRID, width=1, height=18).pack(side="left", padx=10)
 
-    _check(top, "ארכיון", include_archive).pack(side="left")
+    _check(top, tr("ארכיון", "Archive"), include_archive).pack(side="left")
     _check(top, "Disk", show_disk).pack(side="left", padx=(6, 0))
     _check(top, "Swap", show_swap).pack(side="left", padx=(6, 0))
     _check(top, "VRAM", show_vram).pack(side="left", padx=(6, 0))
@@ -403,7 +410,7 @@ def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
 
     tk.Frame(top, bg=GRID, width=1, height=18).pack(side="left", padx=10)
 
-    pause_btn = tk.Checkbutton(top, text="השהה רענון", variable=paused,
+    pause_btn = tk.Checkbutton(top, text=tr("השהה רענון", "Pause refresh"), variable=paused,
                                bg=PANEL, fg=DIM, selectcolor=PANEL2,
                                activebackground=PANEL, activeforeground=FG,
                                font=("Segoe UI", 9), bd=0, highlightthickness=0)
@@ -417,7 +424,7 @@ def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
         events = _read_today_spikes(DEFAULT_SPIKES_DIR)
         _show_alerts_panel(win, events)
 
-    alerts_btn = tk.Button(top, text="🔔 התראות אחרונות",
+    alerts_btn = tk.Button(top, text=tr("🔔 התראות אחרונות", "🔔 Recent alerts"),
                            bg=PANEL, fg=FG,
                            activebackground=PANEL2, activeforeground=FG,
                            relief="flat", bd=0, font=("Segoe UI", 9, "bold"),
@@ -425,7 +432,7 @@ def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
                            command=_open_alerts_panel)
     alerts_btn.pack(side="left")
 
-    status_var = tk.StringVar(value="טוען…")
+    status_var = tk.StringVar(value=tr("טוען…", "Loading…"))
     tk.Label(top, textvariable=status_var, bg=PANEL, fg=MUTED,
              font=("Segoe UI", 9)).pack(side="left", padx=(14, 0))
 
@@ -502,7 +509,7 @@ def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
             ax1.text(0.5, 0.5, "Waiting for samples...",
                      ha="center", va="center", transform=ax1.transAxes,
                      color=DIM, fontsize=12)
-            status_var.set("ממתין לדגימות…")
+            status_var.set(tr("ממתין לדגימות…", "Waiting for samples…"))
             canvas.draw_idle()
             return
 
@@ -607,10 +614,12 @@ def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
         latest = (f"CPU {cpu[-1]:.0f}%  RAM {ram[-1]:.0f}%"
                   + (f"  Disk {disk_v[-1]:.0f}%" if disk_v[-1] is not None else "")
                   + (f"  Temp {temps_v[-1]:.0f}°C" if temps_v[-1] is not None else ""))
-        status_var.set(
+        status_var.set(tr(
             f"רענון אחרון: {datetime.now().strftime('%H:%M:%S')}  ·  "
-            f"{len(t)}/{len(all_times)} נקודות בחלון  ·  עכשיו: {latest}"
-        )
+            f"{len(t)}/{len(all_times)} נקודות בחלון  ·  עכשיו: {latest}",
+            f"Last refresh: {datetime.now().strftime('%H:%M:%S')}  ·  "
+            f"{len(t)}/{len(all_times)} points in window  ·  now: {latest}",
+        ))
 
     def tick() -> None:
         if not win.winfo_exists():

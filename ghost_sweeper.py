@@ -44,6 +44,8 @@ from dataclasses import dataclass
 
 import psutil
 
+from i18n import tr
+
 log = logging.getLogger(__name__)
 
 
@@ -202,17 +204,19 @@ def humanize_duration(seconds: float | None) -> str:
         return "—"
     seconds = max(0.0, float(seconds))
     if seconds < 60:
-        return f"{seconds:.0f} שניות"
+        return tr(f"{seconds:.0f} שניות", f"{seconds:.0f} sec")
     minutes = seconds / 60.0
     if minutes < 60:
-        return f"{minutes:.0f} דקות"
+        return tr(f"{minutes:.0f} דקות", f"{minutes:.0f} min")
     hours = minutes / 60.0
     if hours < 24:
         whole = int(hours)
         rem_min = int(round((hours - whole) * 60))
-        return f"{whole} שעות {rem_min} דקות" if rem_min else f"{whole} שעות"
+        if rem_min:
+            return tr(f"{whole} שעות {rem_min} דקות", f"{whole} h {rem_min} min")
+        return tr(f"{whole} שעות", f"{whole} h")
     days = hours / 24.0
-    return f"{days:.1f} ימים"
+    return tr(f"{days:.1f} ימים", f"{days:.1f} days")
 
 
 def humanize_bytes(n: int | None) -> str:
@@ -347,18 +351,31 @@ def set_secrets_redacted(enabled: bool) -> None:
         log.exception("Could not persist redact_secrets")
 
 
-REASON_LABELS: dict[str, str] = {
-    "ORPHAN": "יתום — ההורה נסגר",
-    "DORMANT": "רדום — לא עשה כלום",
-    "IDLE_SERVER": "שרת ללא לקוחות",
-}
+# Display labels are built at call time (not import time) so they follow the
+# active UI language. REASON_LABELS / VERDICT_LABELS stay as the set of known
+# keys for code that only needs to check membership.
 
-VERDICT_LABELS: dict[str, str] = {
-    "FINISHED": "כנראה סיים",
-    "STUCK": "תקוע",
-    "LEAKING": "תופח בזיכרון",
-    "WORKING": "עדיין עובד",
-}
+def reason_label(reason: str) -> str:
+    labels = {
+        "ORPHAN": tr("יתום — ההורה נסגר", "Orphan — parent exited"),
+        "DORMANT": tr("רדום — לא עשה כלום", "Dormant — doing nothing"),
+        "IDLE_SERVER": tr("שרת ללא לקוחות", "Server with no clients"),
+    }
+    return labels.get(reason, reason)
+
+
+def verdict_label(verdict: str) -> str:
+    labels = {
+        "FINISHED": tr("כנראה סיים", "Probably finished"),
+        "STUCK": tr("תקוע", "Stuck"),
+        "LEAKING": tr("תופח בזיכרון", "Growing in memory"),
+        "WORKING": tr("עדיין עובד", "Still working"),
+    }
+    return labels.get(verdict, verdict)
+
+
+REASON_LABELS: tuple[str, ...] = ("ORPHAN", "DORMANT", "IDLE_SERVER")
+VERDICT_LABELS: tuple[str, ...] = ("FINISHED", "STUCK", "LEAKING", "WORKING")
 
 VERDICT_COLORS: dict[str, str] = {
     "STUCK": "#ff5c6c",
@@ -869,36 +886,51 @@ def _classify(*, window_pct: float, lifetime_pct: float, idle_for: float | None,
         # Someone is talking to it right now. It may well be orphaned, but it
         # is demonstrably still in use — which is the single most important
         # thing to tell the user before they close it.
-        conns = ("חיבור רשת פעיל אחד" if established == 1
-                 else f"{established} חיבורי רשת פעילים")
+        conns = (tr("חיבור רשת פעיל אחד", "one active network connection")
+                 if established == 1
+                 else tr(f"{established} חיבורי רשת פעילים",
+                         f"{established} active network connections"))
         return ("WORKING",
-                f"יש לו {conns} כרגע — משהו עדיין משתמש בו. גם אם ההורה שלו "
-                f"נסגר, סגירה עלולה לשבור משהו שרץ עכשיו.")
+                tr(f"יש לו {conns} כרגע — משהו עדיין משתמש בו. גם אם ההורה שלו "
+                   f"נסגר, סגירה עלולה לשבור משהו שרץ עכשיו.",
+                   f"It has {conns} right now — something is still using it. Even "
+                   f"if its parent exited, closing it could break something running now."))
 
     if pct >= _SPINNING_PCT:
         return ("STUCK",
-                f"שורף {pct:.0f}% מליבה ולא מסיים — התנהגות אופיינית "
-                f"ללולאה תקועה, לא לעבודה אמיתית.")
+                tr(f"שורף {pct:.0f}% מליבה ולא מסיים — התנהגות אופיינית "
+                   f"ללולאה תקועה, לא לעבודה אמיתית.",
+                   f"Burning {pct:.0f}% of a core and never finishing — typical "
+                   f"of a stuck loop, not real work."))
 
     if rss_delta >= _LEAK_DELTA_BYTES and pct < _WORKING_PCT:
         return ("LEAKING",
-                f"כמעט לא צורך CPU, אבל הזיכרון שלו גדל ב-{humanize_bytes(rss_delta)} "
-                f"מאז שהתחלתי לעקוב — נראה כמו דליפת זיכרון.")
+                tr(f"כמעט לא צורך CPU, אבל הזיכרון שלו גדל ב-{humanize_bytes(rss_delta)} "
+                   f"מאז שהתחלתי לעקוב — נראה כמו דליפת זיכרון.",
+                   f"Barely uses CPU, but its memory grew by {humanize_bytes(rss_delta)} "
+                   f"since I started watching — looks like a memory leak."))
 
     if pct >= _WORKING_PCT:
         return ("WORKING",
-                f"עדיין מבצע עבודה קלה ({pct:.1f}% מליבה) — ייתכן שהוא לא נטוש. "
-                f"כדאי לבדוק לפני סגירה.")
+                tr(f"עדיין מבצע עבודה קלה ({pct:.1f}% מליבה) — ייתכן שהוא לא נטוש. "
+                   f"כדאי לבדוק לפני סגירה.",
+                   f"Still doing light work ({pct:.1f}% of a core) — it may not be "
+                   f"abandoned. Worth checking before closing."))
 
     if "IDLE_SERVER" in reasons:
         return ("FINISHED",
-                f"מאזין לפורט אבל אף אחד לא התחבר אליו כבר "
-                f"{humanize_duration(idle_for)}, והוא לא ביצע שום עבודה — "
-                f"שרת פיתוח שנשכח פתוח.")
+                tr(f"מאזין לפורט אבל אף אחד לא התחבר אליו כבר "
+                   f"{humanize_duration(idle_for)}, והוא לא ביצע שום עבודה — "
+                   f"שרת פיתוח שנשכח פתוח.",
+                   f"Listening on a port, but nobody has connected for "
+                   f"{humanize_duration(idle_for)} and it has done no work — "
+                   f"a dev server left running."))
 
     return ("FINISHED",
-            f"לא ביצע שום עבודה כבר {humanize_duration(idle_for)}. "
-            f"סיים את מה שהיה לו לעשות ונשאר תלוי באוויר.")
+            tr(f"לא ביצע שום עבודה כבר {humanize_duration(idle_for)}. "
+               f"סיים את מה שהיה לו לעשות ונשאר תלוי באוויר.",
+               f"Has done no work for {humanize_duration(idle_for)}. "
+               f"It finished what it had to do and was left hanging."))
 
 
 def _describe(pid: int) -> tuple[str, str, str, str]:

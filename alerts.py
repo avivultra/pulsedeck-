@@ -14,6 +14,8 @@ from typing import Callable
 
 import psutil
 
+import i18n
+from i18n import tr
 from process_monitor import ProcessInfo, get_default_sampler
 
 log = logging.getLogger(__name__)
@@ -55,17 +57,17 @@ def _is_protected(pid: int, name: str) -> bool:
 
 def format_relative_he(seconds_ago: float | None) -> str:
     if seconds_ago is None:
-        return "ברקע / לא נצפתה פעילות"
+        return tr("ברקע / לא נצפתה פעילות", "background / no activity seen")
     s = max(0.0, seconds_ago)
     if s < 5:
-        return "פעיל עכשיו"
+        return tr("פעיל עכשיו", "active now")
     if s < 60:
-        return f"פעיל לפני {int(s)} שניות"
+        return tr(f"פעיל לפני {int(s)} שניות", f"active {int(s)}s ago")
     if s < 3600:
-        return f"פעיל לפני {int(s / 60)} דקות"
+        return tr(f"פעיל לפני {int(s / 60)} דקות", f"active {int(s / 60)} min ago")
     if s < 86400:
-        return f"פעיל לפני {int(s / 3600)} שעות"
-    return f"פעיל לפני {int(s / 86400)} ימים"
+        return tr(f"פעיל לפני {int(s / 3600)} שעות", f"active {int(s / 3600)} h ago")
+    return tr(f"פעיל לפני {int(s / 86400)} ימים", f"active {int(s / 86400)} days ago")
 
 
 def format_uptime_he(seconds: float) -> str:
@@ -158,14 +160,16 @@ def terminate_process(pid: int, name: str, create_time: float | None = None,
 def try_terminate(pid: int, name: str, parent: tk.Misc | None) -> bool:
     if _is_protected(pid, name):
         messagebox.showerror(
-            "תהליך מוגן",
-            f"לא ניתן להרוג את {name} (PID {pid}) — תהליך מערכת קריטי או המוניטור עצמו.",
+            tr("תהליך מוגן", "Protected process"),
+            tr(f"לא ניתן להרוג את {name} (PID {pid}) — תהליך מערכת קריטי או המוניטור עצמו.",
+               f"Cannot kill {name} (PID {pid}) — it is a critical system process or the monitor itself."),
             parent=parent,
         )
         return False
     if not messagebox.askyesno(
-        "אישור הרג תהליך",
-        f"להרוג את {name} (PID {pid})?\n\nשים לב: עבודה לא שמורה תאבד.",
+        tr("אישור הרג תהליך", "Confirm kill process"),
+        tr(f"להרוג את {name} (PID {pid})?\n\nשים לב: עבודה לא שמורה תאבד.",
+           f"Kill {name} (PID {pid})?\n\nNote: unsaved work will be lost."),
         parent=parent,
     ):
         return False
@@ -173,12 +177,14 @@ def try_terminate(pid: int, name: str, parent: tk.Misc | None) -> bool:
     if outcome == "closed":
         return True
     if outcome == "already_gone":
-        messagebox.showinfo("התהליך כבר אינו רץ",
-                            f"{name} (PID {pid}) הסתיים בעצמו.", parent=parent)
+        messagebox.showinfo(tr("התהליך כבר אינו רץ", "Process no longer running"),
+                            tr(f"{name} (PID {pid}) הסתיים בעצמו.",
+                               f"{name} (PID {pid}) exited on its own."), parent=parent)
         return True
     messagebox.showerror(
-        "כשל בהרג תהליך",
-        f"לא הצלחתי להרוג את {name} (PID {pid}).\n\nאולי דרושות הרשאות מנהל.",
+        tr("כשל בהרג תהליך", "Failed to kill process"),
+        tr(f"לא הצלחתי להרוג את {name} (PID {pid}).\n\nאולי דרושות הרשאות מנהל.",
+           f"Could not kill {name} (PID {pid}).\n\nAdministrator rights may be required."),
         parent=parent,
     )
     return False
@@ -199,15 +205,15 @@ def _open_task_manager() -> None:
 def _status_dot(proc: ProcessInfo) -> tuple[str, str]:
     """Return (color, label) for the activity dot."""
     if _is_protected(proc.pid, proc.name):
-        return DOT_PROTECTED, "מוגן"
+        return DOT_PROTECTED, tr("מוגן", "protected")
     s = proc.last_active_seconds_ago
     if s is None:
-        return DOT_BACKGROUND, "ברקע"
+        return DOT_BACKGROUND, tr("ברקע", "background")
     if s < 5:
-        return DOT_ACTIVE, "פעיל"
+        return DOT_ACTIVE, tr("פעיל", "active")
     if s < 120:
-        return DOT_RECENT, "פעיל לאחרונה"
-    return DOT_BACKGROUND, "ללא פעילות"
+        return DOT_RECENT, tr("פעיל לאחרונה", "recently active")
+    return DOT_BACKGROUND, tr("ללא פעילות", "idle")
 
 
 def _make_proc_card(parent: tk.Misc, proc: ProcessInfo, value_text: str,
@@ -240,22 +246,23 @@ def _make_proc_card(parent: tk.Misc, proc: ProcessInfo, value_text: str,
     name_frame = tk.Frame(top, bg=PANEL_HI)
     name_frame.pack(side="right", fill="x", expand=True)
     tk.Label(name_frame, text=proc.name, bg=PANEL_HI, fg=FG,
-             font=("Segoe UI", 11, "bold"), anchor="e").pack(side="right")
+             font=("Segoe UI", 11, "bold"), anchor=i18n.ANCHOR()).pack(side="right")
     tk.Label(name_frame, text="●", bg=PANEL_HI, fg=dot_color,
              font=("Segoe UI", 12)).pack(side="right", padx=(0, 6))
 
     # Meta row: PID · status · uptime
     meta_text = (f"PID {proc.pid}  ·  {dot_label}  ·  "
                  f"{format_relative_he(proc.last_active_seconds_ago)}  ·  "
-                 f"רץ {format_uptime_he(proc.process_uptime_seconds)}")
+                 + tr(f"רץ {format_uptime_he(proc.process_uptime_seconds)}",
+                      f"up {format_uptime_he(proc.process_uptime_seconds)}"))
     tk.Label(content, text=meta_text, bg=PANEL_HI, fg=DIM,
-             font=("Segoe UI", 9), anchor="e").pack(fill="x", pady=(3, 0))
+             font=("Segoe UI", 9), anchor=i18n.ANCHOR()).pack(fill="x", pady=(3, 0))
 
     # Action row
     action = tk.Frame(content, bg=PANEL_HI)
     action.pack(fill="x", pady=(6, 0))
     if _is_protected(proc.pid, proc.name):
-        tk.Label(action, text="🔒 מוגן", bg=PANEL_HI, fg=DOT_PROTECTED,
+        tk.Label(action, text=tr("🔒 מוגן", "🔒 Protected"), bg=PANEL_HI, fg=DOT_PROTECTED,
                  font=("Segoe UI", 9, "bold")).pack(side="left")
     else:
         btn = tk.Button(action, text="✕  Kill",
@@ -271,7 +278,7 @@ def _make_proc_card(parent: tk.Misc, proc: ProcessInfo, value_text: str,
     def _card_menu(event: tk.Event) -> None:
         menu = tk.Menu(win, tearoff=0)
         menu.add_command(
-            label=f"🔇 השתק התראות עבור {proc.name}",
+            label=tr(f"🔇 השתק התראות עבור {proc.name}", f"🔇 Mute alerts for {proc.name}"),
             command=lambda: mute_process_persist(proc.name, parent_widget=win),
         )
         try:
@@ -289,7 +296,7 @@ def _build_alert_window(event: AlertEvent, parent: tk.Misc | None) -> tk.Topleve
         win: tk.Toplevel | tk.Tk = tk.Tk()
     else:
         win = tk.Toplevel(parent)
-    win.title("התראת עומס מערכת")
+    win.title(tr("התראת עומס מערכת", "System load alert"))
     win.geometry("760x520")
     win.configure(bg=BG)
     try:
@@ -310,13 +317,13 @@ def _build_alert_window(event: AlertEvent, parent: tk.Misc | None) -> tk.Topleve
     title_row.pack(fill="x")
     tk.Label(title_row, text="◢◤", bg=PANEL, fg=BAD,
              font=("Consolas", 14, "bold")).pack(side="left", padx=(0, 8))
-    tk.Label(title_row, text="זוהה עומס במחשב", bg=PANEL, fg=FG,
-             font=("Segoe UI", 17, "bold"), anchor="e").pack(side="right", fill="x", expand=True)
+    tk.Label(title_row, text=tr("זוהה עומס במחשב", "High load detected"), bg=PANEL, fg=FG,
+             font=("Segoe UI", 17, "bold"), anchor=i18n.ANCHOR()).pack(side="right", fill="x", expand=True)
 
     # Reason — sub-line
     tk.Label(hdr, text=event.reason, bg=PANEL, fg=DIM,
-             font=("Segoe UI", 10), anchor="e", wraplength=720,
-             justify="right").pack(fill="x", pady=(4, 8))
+             font=("Segoe UI", 10), anchor=i18n.ANCHOR(), wraplength=720,
+             justify=i18n.JUSTIFY()).pack(fill="x", pady=(4, 8))
 
     # Big metrics strip — CPU and RAM side by side
     metrics = tk.Frame(hdr, bg=PANEL)
@@ -327,7 +334,7 @@ def _build_alert_window(event: AlertEvent, parent: tk.Misc | None) -> tk.Topleve
     def _metric_block(parent, label: str, before: float, after: float, color: str, col: int):
         block = tk.Frame(parent, bg=PANEL)
         tk.Label(block, text=label, bg=PANEL, fg=DIM,
-                 font=("Segoe UI", 9), anchor="e").pack(fill="x")
+                 font=("Segoe UI", 9), anchor=i18n.ANCHOR()).pack(fill="x")
         line = tk.Frame(block, bg=PANEL)
         line.pack(fill="x")
         tk.Label(line, text=f"{after:.0f}%", bg=PANEL, fg=color,
@@ -350,12 +357,12 @@ def _build_alert_window(event: AlertEvent, parent: tk.Misc | None) -> tk.Topleve
         tk.Label(hdr_frame, text=f"{count}", bg=BG, fg=color,
                  font=(MONO_FAMILY, 10, "bold")).pack(side="left")
         tk.Label(hdr_frame, text=label, bg=BG, fg=color,
-                 font=("Segoe UI", 11, "bold"), anchor="e").pack(side="right", fill="x", expand=True)
+                 font=("Segoe UI", 11, "bold"), anchor=i18n.ANCHOR()).pack(side="right", fill="x", expand=True)
         # Underline divider
         return hdr_frame
 
     cpu_col = tk.Frame(body, bg=BG)
-    _column_header(cpu_col, "מובילים ב-CPU", len(event.top_cpu), ACCENT).pack(fill="x")
+    _column_header(cpu_col, tr("מובילים ב-CPU", "Top CPU"), len(event.top_cpu), ACCENT).pack(fill="x")
     tk.Frame(cpu_col, bg=ACCENT, height=1).pack(fill="x", pady=(2, 8))
     for p in event.top_cpu:
         card = _make_proc_card(cpu_col, p, f"{p.cpu_percent:.0f}%", ACCENT, win)
@@ -363,7 +370,7 @@ def _build_alert_window(event: AlertEvent, parent: tk.Misc | None) -> tk.Topleve
     cpu_col.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
 
     ram_col = tk.Frame(body, bg=BG)
-    _column_header(ram_col, "מובילים ב-RAM", len(event.top_rss), ORANGE).pack(fill="x")
+    _column_header(ram_col, tr("מובילים ב-RAM", "Top RAM"), len(event.top_rss), ORANGE).pack(fill="x")
     tk.Frame(ram_col, bg=ORANGE, height=1).pack(fill="x", pady=(2, 8))
     for p in event.top_rss:
         card = _make_proc_card(ram_col, p, _fmt_mib(p.rss_bytes), ORANGE, win)
@@ -375,10 +382,10 @@ def _build_alert_window(event: AlertEvent, parent: tk.Misc | None) -> tk.Topleve
     ftr.pack(fill="x", side="bottom")
     btn_style = dict(font=("Segoe UI", 9, "bold"), relief="flat", bd=0,
                      padx=14, pady=6, cursor="hand2")
-    tk.Button(ftr, text="פתח Task Manager", command=_open_task_manager,
+    tk.Button(ftr, text=tr("פתח Task Manager", "Open Task Manager"), command=_open_task_manager,
               bg=PANEL_HI, fg=FG, activebackground=ACCENT, activeforeground=BG,
               **btn_style).pack(side="left")
-    tk.Button(ftr, text="סגור", command=win.destroy,
+    tk.Button(ftr, text=tr("סגור", "Close"), command=win.destroy,
               bg=PANEL_HI, fg=FG, activebackground=BAD, activeforeground="white",
               **btn_style).pack(side="right")
     return win
@@ -410,15 +417,17 @@ TOAST_MARGIN_Y   = 16
 def _toast_summary(event: AlertEvent) -> tuple[str, str, str]:
     """Returns (title_line, value_line, color) — short text for the toast body."""
     if event.trigger == "cpu":
-        title = "עומס CPU זוהה"
-        value = f"{event.cpu_after:.0f}% (היה {event.cpu_before:.0f}%)"
+        title = tr("עומס CPU זוהה", "CPU load detected")
+        value = tr(f"{event.cpu_after:.0f}% (היה {event.cpu_before:.0f}%)",
+                   f"{event.cpu_after:.0f}% (was {event.cpu_before:.0f}%)")
         color = ACCENT
     elif event.trigger == "ram":
-        title = "עומס זיכרון זוהה"
-        value = f"{event.ram_after:.0f}% (היה {event.ram_before:.0f}%)"
+        title = tr("עומס זיכרון זוהה", "Memory load detected")
+        value = tr(f"{event.ram_after:.0f}% (היה {event.ram_before:.0f}%)",
+                   f"{event.ram_after:.0f}% (was {event.ram_before:.0f}%)")
         color = ORANGE
     else:
-        title = "עומס מערכת זוהה"
+        title = tr("עומס מערכת זוהה", "System load detected")
         value = f"CPU {event.cpu_after:.0f}%  ·  RAM {event.ram_after:.0f}%"
         color = BAD
     return title, value, color
@@ -465,17 +474,18 @@ def _build_toast(event: AlertEvent, parent: tk.Misc | None,
     close_btn.pack(side="left")
 
     title_lbl = tk.Label(top_row, text=title_text, bg=PANEL, fg=FG,
-                         font=("Segoe UI", 11, "bold"), anchor="e")
+                         font=("Segoe UI", 11, "bold"), anchor=i18n.ANCHOR())
     title_lbl.pack(side="right", fill="x", expand=True)
 
     # Value (mono)
     tk.Label(content, text=value_text, bg=PANEL, fg=accent_color,
-             font=(MONO_FAMILY, 14, "bold"), anchor="e").pack(fill="x", pady=(4, 2))
+             font=(MONO_FAMILY, 14, "bold"), anchor=i18n.ANCHOR()).pack(fill="x", pady=(4, 2))
 
     # Hint (also mentions snooze via right-click for discoverability)
-    hint_text = "לחץ לפתיחת פרטים והרג תהליך  ·  קליק ימני להשהיה"
+    hint_text = tr("לחץ לפתיחת פרטים והרג תהליך  ·  קליק ימני להשהיה",
+                   "Click for details and kill  ·  right-click to snooze")
     tk.Label(content, text=hint_text,
-             bg=PANEL, fg=DIM, font=("Segoe UI", 9), anchor="e").pack(fill="x")
+             bg=PANEL, fg=DIM, font=("Segoe UI", 9), anchor=i18n.ANCHOR()).pack(fill="x")
 
     # Position: bottom-right above taskbar
     win.update_idletasks()
@@ -534,14 +544,14 @@ def _build_toast(event: AlertEvent, parent: tk.Misc | None,
     if on_snooze is not None:
         def _show_snooze_menu(event: tk.Event) -> None:
             menu = tk.Menu(win, tearoff=0)
-            menu.add_command(label="השהה התראות ל-15 דקות",
+            menu.add_command(label=tr("השהה התראות ל-15 דקות", "Snooze alerts for 15 minutes"),
                              command=lambda: (on_snooze(15 * 60), _dismiss()))
-            menu.add_command(label="השהה התראות ל-30 דקות",
+            menu.add_command(label=tr("השהה התראות ל-30 דקות", "Snooze alerts for 30 minutes"),
                              command=lambda: (on_snooze(30 * 60), _dismiss()))
-            menu.add_command(label="השהה התראות לשעה",
+            menu.add_command(label=tr("השהה התראות לשעה", "Snooze alerts for 1 hour"),
                              command=lambda: (on_snooze(60 * 60), _dismiss()))
             menu.add_separator()
-            menu.add_command(label="סגור", command=_dismiss)
+            menu.add_command(label=tr("סגור", "Close"), command=_dismiss)
             try:
                 menu.tk_popup(event.x_root, event.y_root)
             finally:
@@ -657,9 +667,11 @@ def mute_process_persist(process_name: str, parent_widget: tk.Misc | None = None
     if parent_widget is not None:
         try:
             messagebox.showinfo(
-                "הושתק",
-                f"התראות שבהן {name} הוא הגורם המרכזי לא יוצגו יותר.\n"
-                "לביטול: ערוך את muted_processes ב-config.json.",
+                tr("הושתק", "Muted"),
+                tr(f"התראות שבהן {name} הוא הגורם המרכזי לא יוצגו יותר.\n"
+                   "לביטול: ערוך את muted_processes ב-config.json.",
+                   f"Alerts where {name} is the main cause will no longer be shown.\n"
+                   "To undo: edit muted_processes in config.json."),
                 parent=parent_widget,
             )
         except tk.TclError:

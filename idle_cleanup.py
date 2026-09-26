@@ -29,6 +29,8 @@ from dataclasses import dataclass, field
 
 import psutil
 
+from i18n import tr
+
 log = logging.getLogger(__name__)
 
 MIB = 1024 * 1024
@@ -165,8 +167,9 @@ def _idle_for(info) -> float:
 def _fmt_minutes(seconds: float) -> str:
     minutes = int(seconds // 60)
     if minutes < 60:
-        return f"{minutes} דק'"
-    return f"{minutes // 60} שע' {minutes % 60} דק'"
+        return tr(f"{minutes} דק'", f"{minutes} min")
+    return tr(f"{minutes // 60} שע' {minutes % 60} דק'",
+              f"{minutes // 60} h {minutes % 60} min")
 
 
 # ---------------------------------------------------------------- candidates
@@ -181,7 +184,8 @@ def ghost_targets(ghosts) -> list[CleanupTarget]:
         out.append(CleanupTarget(
             pid=g.pid, name=g.name, create_time=g.create_time,
             rss_bytes=g.rss_bytes, kind="ghost",
-            detail=f"נטוש · לא עשה כלום {_fmt_minutes(g.idle_for_seconds or 0)}",
+            detail=tr(f"נטוש · לא עשה כלום {_fmt_minutes(g.idle_for_seconds or 0)}",
+                      f"Abandoned · idle for {_fmt_minutes(g.idle_for_seconds or 0)}"),
             member_pids=(g.pid,), ghost=g,
         ))
     return out
@@ -195,16 +199,20 @@ def idle_hog_targets(sampler, *, exclude_pids: set[int] | None = None,
     from alerts import PROTECTED_NAMES
 
     if sampler is None:
-        return [], "דוגם התהליכים לא פעיל, אז אי אפשר להוכיח שתהליך לא פעיל."
+        return [], tr("דוגם התהליכים לא פעיל, אז אי אפשר להוכיח שתהליך לא פעיל.",
+                      "The process sampler is not running, so idleness cannot be proven.")
     snap = sampler.snapshot()
     if not snap:
-        return [], "עדיין אין נתונים — נסה שוב בעוד דקה."
+        return [], tr("עדיין אין נתונים — נסה שוב בעוד דקה.",
+                      "No data yet — try again in a minute.")
     by_pid = {p.pid: p for p in snap}
     longest_watch = max(p.observed_seconds for p in snap)
     if longest_watch < min_idle:
         left = int((min_idle - longest_watch) // 60) + 1
-        return [], (f"המוניטור רץ פחות מ-{int(min_idle // 60)} דקות. "
-                    f"בעוד כ-{left} דק' אפשר יהיה להוכיח מה לא פעיל.")
+        return [], tr(f"המוניטור רץ פחות מ-{int(min_idle // 60)} דקות. "
+                      f"בעוד כ-{left} דק' אפשר יהיה להוכיח מה לא פעיל.",
+                      f"The monitor has been running for less than {int(min_idle // 60)} minutes. "
+                      f"In about {left} min it will be able to prove what is idle.")
 
     exclude = set(exclude_pids or ()) | _self_and_ancestors()
     skip_names = INTERESTING_NAMES | NEVER_REPORT | PROTECTED_NAMES | KEEP_NAMES
@@ -249,12 +257,16 @@ def idle_hog_targets(sampler, *, exclude_pids: set[int] | None = None,
                 continue
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
-        extra = f" (+{len(member_pids) - 1} תהליכי משנה)" if len(member_pids) > 1 else ""
+        extra = (tr(f" (+{len(member_pids) - 1} תהליכי משנה)",
+                    f" (+{len(member_pids) - 1} child processes)")
+                 if len(member_pids) > 1 else "")
         out.append(CleanupTarget(
             pid=info.pid, name=info.name, create_time=proc.create_time(),
             rss_bytes=family_rss, kind="idle",
-            detail=f"לא השתמש במעבד לפחות {_fmt_minutes(_idle_for(info))}, "
-                   f"בלי חלון ובלי רשת{extra}",
+            detail=tr(f"לא השתמש במעבד לפחות {_fmt_minutes(_idle_for(info))}, "
+                      f"בלי חלון ובלי רשת{extra}",
+                      f"No CPU use for at least {_fmt_minutes(_idle_for(info))}, "
+                      f"no window and no network{extra}"),
             member_pids=member_pids,
         ))
     out.sort(key=lambda t: t.rss_bytes, reverse=True)
@@ -279,9 +291,12 @@ def claude_sessions_note(exclude_pids: set[int]) -> str:
             continue
     if count == 0:
         return ""
-    return (f"ℹ עוד {count} שיחות Claude Code פתוחות (~{rss // MIB} MB) לא נכללות — "
-            f"שיחה שמחכה לך נראית לא פעילה אבל היא בשימוש. רק שיחות שהמטאטא "
-            f"זיהה כנטושות נכללות למעלה. את השאר עדיף לסגור מתוך אפליקציית Claude.")
+    return tr(f"ℹ עוד {count} שיחות Claude Code פתוחות (~{rss // MIB} MB) לא נכללות — "
+              f"שיחה שמחכה לך נראית לא פעילה אבל היא בשימוש. רק שיחות שהמטאטא "
+              f"זיהה כנטושות נכללות למעלה. את השאר עדיף לסגור מתוך אפליקציית Claude.",
+              f"ℹ {count} more open Claude Code sessions (~{rss // MIB} MB) are not included — "
+              f"a session waiting for you looks idle but is in use. Only sessions the sweeper "
+              f"identified as abandoned are listed above. Close the rest from the Claude app.")
 
 
 # ---------------------------------------------------------------- verification
@@ -314,7 +329,7 @@ def verify_idle(targets: list[CleanupTarget], sample_seconds: float = VERIFY_SAM
     for t in targets:
         members = t.member_pids or (t.pid,)
         if before.get(t.pid) is None or _cpu_and_rss(t.pid, t.create_time) is None:
-            skipped.append((t, "כבר לא רץ"))
+            skipped.append((t, tr("כבר לא רץ", "no longer running")))
             continue
         cpu_used = 0.0
         rss_growth = 0
@@ -326,13 +341,16 @@ def verify_idle(targets: list[CleanupTarget], sample_seconds: float = VERIFY_SAM
             cpu_used += a[0] - b[0]
             rss_growth += a[1] - b[1]
         if cpu_used > VERIFY_CPU_EPSILON_SEC:
-            skipped.append((t, "התעורר — משתמש במעבד עכשיו"))
+            skipped.append((t, tr("התעורר — משתמש במעבד עכשיו",
+                                  "woke up — using the CPU now")))
         elif rss_growth > VERIFY_RSS_GROWTH_BYTES:
-            skipped.append((t, "הזיכרון שלו גדל עכשיו"))
+            skipped.append((t, tr("הזיכרון שלו גדל עכשיו",
+                                  "its memory is growing now")))
         elif any(m in established for m in members):
-            skipped.append((t, "יש לו חיבור רשת פעיל"))
+            skipped.append((t, tr("יש לו חיבור רשת פעיל",
+                                  "it has an active network connection")))
         elif any(m in windowed for m in members):
-            skipped.append((t, "נפתח לו חלון"))
+            skipped.append((t, tr("נפתח לו חלון", "it opened a window")))
         else:
             ok.append(t)
     return ok, skipped

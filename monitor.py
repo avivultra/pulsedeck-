@@ -22,6 +22,7 @@ from pathlib import Path
 import psutil
 
 import config as app_config
+from i18n import tr
 from dependencies import check_features, enabled_features_from_args, format_missing
 from metric_history import (
     DEFAULT_CHART_PATH,
@@ -207,7 +208,7 @@ def render_snapshot(s: Snapshot, *, no_clear: bool) -> None:
     gpu_t = read_gpu_temp_celsius()
     temp_bits: list[str] = []
     if s.temp_celsius is not None:
-        temp_bits.append(f"מחשב {s.temp_celsius:.0f}°C")
+        temp_bits.append(tr(f"מחשב {s.temp_celsius:.0f}°C", f"PC {s.temp_celsius:.0f}°C"))
     if gpu_t is not None:
         temp_bits.append(f"GPU {gpu_t:.0f}°C")
     temp_suffix = ("  (" + " · ".join(temp_bits) + ")") if temp_bits else ""

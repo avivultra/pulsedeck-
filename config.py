@@ -17,7 +17,9 @@ PROJECT_DIR = Path(__file__).resolve().parent
 CONFIG_FILENAME = "config.json"
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "ui": {"dock": False, "tray": False, "history": False, "console": True},
+    # language: "auto" follows the Windows display language; "he" / "en" force one.
+    "ui": {"dock": False, "tray": False, "history": False, "console": True,
+           "language": "auto"},
     "disk_path": None,
     "history_dir": "history",
     "spike": {"cpu_threshold": 12, "ram_threshold": 6, "enabled": True},
@@ -40,6 +42,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "y": None,           # None = auto-place; otherwise pixel Y
         "font_scale": 1.0,   # 0.7 .. 1.6 — multiplier on font size
         "pinned": True,      # always-on-top: re-asserted every tick when pinned
+    },
+    "hardware": {
+        # Lenovo Extreme Cooling button in the dock: "auto" shows it only when
+        # Lenovo Nerve Center is present; true / false force it.
+        "fan_button": "auto",
     },
     "sweeper": {
         "enabled": True,

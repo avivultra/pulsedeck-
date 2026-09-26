@@ -46,9 +46,20 @@ def _windows_install(shortcut_name: str = "PulseDeck") -> Path:
 
     desktop = _desktop_dir()
     desktop.mkdir(parents=True, exist_ok=True)
-    target_vbs = PROJECT_DIR / "Start-Monitor-Hidden.vbs"
-    if not target_vbs.exists():
-        raise FileNotFoundError(f"Launcher not found: {target_vbs}")
+    # Point the shortcut straight at the pythonw.exe running this installer:
+    # it is the interpreter the packages were just installed into. The .vbs
+    # launcher guesses from a list of usual install paths and can pick a
+    # different Python that lacks psutil (py launcher, Microsoft Store Python).
+    pythonw = Path(sys.executable).with_name("pythonw.exe")
+    monitor_py = PROJECT_DIR / "monitor.py"
+    if pythonw.exists():
+        target = pythonw
+        arguments = f'"{monitor_py}" --dock --history --tray'
+    else:
+        target = PROJECT_DIR / "Start-Monitor-Hidden.vbs"
+        arguments = ""
+        if not target.exists():
+            raise FileNotFoundError(f"Launcher not found: {target}")
 
     icon = ICON_ICO if ICON_ICO.exists() else None
     icon_arg = f"{icon},0" if icon else f"{os.environ.get('SystemRoot', 'C:\\Windows')}\\System32\\shell32.dll,173"
@@ -59,7 +70,8 @@ def _windows_install(shortcut_name: str = "PulseDeck") -> Path:
     ps_script = f"""
 $shell = New-Object -ComObject WScript.Shell
 $lnk = $shell.CreateShortcut('{shortcut_path}')
-$lnk.TargetPath = '{target_vbs}'
+$lnk.TargetPath = '{target}'
+$lnk.Arguments = '{arguments}'
 $lnk.WorkingDirectory = '{PROJECT_DIR}'
 $lnk.WindowStyle = 7
 $lnk.IconLocation = '{icon_arg}'

@@ -16,6 +16,8 @@ from pathlib import Path
 import psutil
 
 import freeze_watch
+import hardware
+from i18n import tr
 
 log = logging.getLogger(__name__)
 
@@ -23,38 +25,39 @@ from monitor import HistoryLogger, collect_snapshot, disk_root_path, format_gib_
 from temperature_readings import read_gpu_memory_mib, read_gpu_temp_celsius
 
 
-def _taskbar_bottom_rect() -> tuple[int, int, int, int] | None:
-    """(left, top, right, bottom) of the taskbar, or None if unknown."""
+def _work_area() -> tuple[int, int, int, int] | None:
+    """(left, top, right, bottom) of the primary screen minus the taskbar.
+
+    Works wherever the taskbar sits (bottom, top, left, right). With a bottom
+    taskbar the bottom edge is exactly the taskbar's top edge, so the dock lands
+    where it always did."""
     if os.name != "nt":
         return None
     import ctypes
-    from ctypes import Structure, byref, wintypes
+    from ctypes import byref, wintypes
 
-    class RECT(Structure):
-        _fields_ = [
-            ("left", wintypes.LONG),
-            ("top", wintypes.LONG),
-            ("right", wintypes.LONG),
-            ("bottom", wintypes.LONG),
-        ]
-
-    class APPBARDATA(Structure):
-        _fields_ = [
-            ("cbSize", wintypes.DWORD),
-            ("hWnd", wintypes.HWND),
-            ("uCallbackMessage", wintypes.UINT),
-            ("uEdge", wintypes.UINT),
-            ("rc", RECT),
-            ("lParam", wintypes.LPARAM),
-        ]
-
-    ABM_GETTASKBARPOS = 5
-    abd = APPBARDATA()
-    abd.cbSize = ctypes.sizeof(APPBARDATA)
-    if ctypes.windll.shell32.SHAppBarMessage(ABM_GETTASKBARPOS, byref(abd)):
-        r = abd.rc
-        return int(r.left), int(r.top), int(r.right), int(r.bottom)
+    SPI_GETWORKAREA = 0x0030
+    rect = wintypes.RECT()
+    if ctypes.windll.user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, byref(rect), 0):
+        return int(rect.left), int(rect.top), int(rect.right), int(rect.bottom)
     return None
+
+
+def _point_on_a_monitor(x: int, y: int) -> bool | None:
+    """Whether (x, y) is on any connected monitor; None when unknown (non-Windows).
+
+    A position saved on a second monitor stays valid while that monitor is
+    plugged in, and is dropped (back to auto-placement) once it is unplugged."""
+    if os.name != "nt":
+        return None
+    import ctypes
+    from ctypes import wintypes
+
+    MONITOR_DEFAULTTONULL = 0
+    user32 = ctypes.windll.user32
+    user32.MonitorFromPoint.restype = wintypes.HMONITOR
+    user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+    return bool(user32.MonitorFromPoint(wintypes.POINT(x, y), MONITOR_DEFAULTTONULL))
 
 
 def _fmt_bps(bps: float) -> str:
@@ -105,7 +108,7 @@ def run_dock_main(args: object) -> None:
     pinned = bool(dock_cfg.get("pinned", True))
 
     root = tk.Tk()
-    root.title("מוניטור ביצועים")
+    root.title(tr("מוניטור ביצועים", "Performance Monitor"))
     root.overrideredirect(True)
 
     def _apply_pin_state() -> None:
@@ -167,9 +170,13 @@ def run_dock_main(args: object) -> None:
     lbl_ghosts = tk.Label(top_row, text="", bg=bg, fg="#a78bfa",
                           font=_font(9, bold=True), anchor="w", cursor="hand2")
     lbl_cpu = tk.Label(top_row, text="CPU …", bg=bg, fg=fg, font=_font(10), anchor="w")
-    lbl_temp = tk.Label(top_row, text="טמפ …", bg=bg, fg=accent, font=_font(9), anchor="e")
+    lbl_temp = tk.Label(top_row, text=tr("טמפ …", "Temp …"), bg=bg, fg=accent,
+                        font=_font(9), anchor="e")
     # Order matters: fan button leftmost, then janitor (dynamic), then CPU.
-    lbl_fan.pack(side=tk.LEFT, padx=(10, 0), pady=4)
+    # Only on machines whose cooling utility answers the hotkey (hardware.py);
+    # elsewhere Ctrl+Shift+1 would land in whatever window has focus.
+    if hardware.fan_button_enabled(_cfg):
+        lbl_fan.pack(side=tk.LEFT, padx=(10, 0), pady=4)
     lbl_cpu.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=16, pady=4)
     lbl_temp.pack(side=tk.RIGHT, padx=16, pady=4)
     # janitor label is packed/forgotten dynamically inside tick()
@@ -204,7 +211,7 @@ def run_dock_main(args: object) -> None:
 
     lbl_ghosts.bind("<Button-1>", _open_ghost_panel)
 
-    var_line2 = tk.StringVar(value="טוען…")
+    var_line2 = tk.StringVar(value=tr("טוען…", "Loading…"))
     lbl2 = tk.Label(body, textvariable=var_line2, bg=bg, fg=fg, font=_font(9),
                     padx=16, pady=2)
     lbl2.pack(fill=tk.X)
@@ -256,17 +263,24 @@ def run_dock_main(args: object) -> None:
         h = root.winfo_reqheight() + 4
         sw = root.winfo_screenwidth()
         sh = root.winfo_screenheight()
+        on_screen = None
         if saved_x is not None and saved_y is not None:
+            # Check the dock's top-left corner and a point well inside it.
+            on_screen = _point_on_a_monitor(int(saved_x) + 40, int(saved_y) + 10)
+        if on_screen:
+            x, y = int(saved_x), int(saved_y)
+        elif on_screen is None and saved_x is not None and saved_y is not None:
             x = max(0, min(int(saved_x), sw - 80))
             y = max(0, min(int(saved_y), sh - 40))
         else:
-            rect = _taskbar_bottom_rect()
-            if rect:
-                top = rect[1]
-                y = max(0, top - h)
+            area = _work_area()
+            if area:
+                left, _top, right, bottom = area
+                y = max(0, bottom - h)
+                x = max(left, left + (right - left - w) // 2)
             else:
                 y = max(0, sh - h - 48)
-            x = max(0, (sw - w) // 2)
+                x = max(0, (sw - w) // 2)
         root.geometry(f"{w}x{h}+{x}+{y}")
 
     def on_close() -> None:
@@ -334,14 +348,16 @@ def run_dock_main(args: object) -> None:
             path = _install()
             if path is not None:
                 messagebox.showinfo(
-                    "קיצור הותקן",
-                    f"נוצר קיצור בשולחן העבודה:\n{path}",
+                    tr("קיצור הותקן", "Shortcut installed"),
+                    tr(f"נוצר קיצור בשולחן העבודה:\n{path}",
+                       f"A desktop shortcut was created:\n{path}"),
                     parent=root,
                 )
             else:
                 messagebox.showwarning(
-                    "התקנה נכשלה",
-                    "לא הצלחתי ליצור את הקיצור. ראה history/monitor.log",
+                    tr("התקנה נכשלה", "Installation failed"),
+                    tr("לא הצלחתי ליצור את הקיצור. ראה history/monitor.log",
+                       "Could not create the shortcut. See history/monitor.log"),
                     parent=root,
                 )
         except Exception:
@@ -354,31 +370,63 @@ def run_dock_main(args: object) -> None:
         except Exception:
             log.exception("Failed to open servers panel")
 
+    def _set_language(code: str) -> None:
+        """Persist the language choice. Applied on next start: every window
+        builds its text once, so a live switch would leave half the UI stale."""
+        from tkinter import messagebox
+        try:
+            cfg = app_config.load_config()
+            cfg.setdefault("ui", {})["language"] = code
+            app_config.save_config(cfg)
+        except Exception:
+            log.exception("Could not save the language choice")
+            return
+        messagebox.showinfo(
+            "PulseDeck",
+            "השפה תתחלף בהפעלה הבאה של PulseDeck.\n\n"
+            "The language will change the next time PulseDeck starts.",
+            parent=root,
+        )
+
     def menu_popup(event: tk.Event) -> None:
         m = tk.Menu(root, tearoff=0)
-        m.add_command(label="פתח גרף חי", command=_open_live_chart)
-        m.add_command(label="🔔 זיהוי עומס / התראות", command=_open_alerts_panel)
-        m.add_command(label="🌐 שרתים פתוחים", command=_open_servers_panel)
-        m.add_command(label="🧹 ניקוי תהליכים מיותרים", command=_open_janitor_panel)
-        m.add_command(label="👻 תהליכים שננטשו", command=_open_ghost_panel)
+        m.add_command(label=tr("פתח גרף חי", "Open live chart"),
+                      command=_open_live_chart)
+        m.add_command(label=tr("🔔 זיהוי עומס / התראות", "🔔 Load events / alerts"),
+                      command=_open_alerts_panel)
+        m.add_command(label=tr("🌐 שרתים פתוחים", "🌐 Open servers"),
+                      command=_open_servers_panel)
+        m.add_command(label=tr("🧹 ניקוי תהליכים מיותרים", "🧹 Clean up leftover processes"),
+                      command=_open_janitor_panel)
+        m.add_command(label=tr("👻 תהליכים שננטשו", "👻 Abandoned processes"),
+                      command=_open_ghost_panel)
         m.add_command(
-            label="תיעודים רגילים",
+            label=tr("תיעודים רגילים", "Metrics history"),
             command=lambda: _open_hist_folder(csv_path),
         )
-        m.add_command(label="תיעודי חריגות", command=_open_spikes_folder)
+        m.add_command(label=tr("תיעודי חריגות", "Spike reports"),
+                      command=_open_spikes_folder)
         m.add_separator()
         m.add_command(
-            label=("📌 בטל נעיצה (כעת נעוץ)" if pinned else "📌 נעץ למעלה"),
+            label=(tr("📌 בטל נעיצה (כעת נעוץ)", "📌 Unpin (currently pinned)") if pinned
+                   else tr("📌 נעץ למעלה", "📌 Pin on top")),
             command=_toggle_pin,
         )
-        m.add_command(label="הגדל גופן", command=lambda: _bump_font(+0.1))
-        m.add_command(label="הקטן גופן", command=lambda: _bump_font(-0.1))
-        m.add_command(label="אפס מיקום", command=_reset_position)
+        m.add_command(label=tr("הגדל גופן", "Larger font"),
+                      command=lambda: _bump_font(+0.1))
+        m.add_command(label=tr("הקטן גופן", "Smaller font"),
+                      command=lambda: _bump_font(-0.1))
+        m.add_command(label=tr("אפס מיקום", "Reset position"), command=_reset_position)
+        lang_menu = tk.Menu(m, tearoff=0)
+        for code, label in (("auto", tr("אוטומטי (לפי Windows)", "Automatic (follow Windows)")),
+                            ("he", "עברית"), ("en", "English")):
+            lang_menu.add_command(label=label, command=lambda c=code: _set_language(c))
+        m.add_cascade(label="🌐 שפה / Language", menu=lang_menu)
         m.add_separator()
-        m.add_command(label="📌 התקן קיצור בשולחן העבודה",
+        m.add_command(label=tr("📌 התקן קיצור בשולחן העבודה", "📌 Install desktop shortcut"),
                       command=_install_desktop_shortcut)
         m.add_separator()
-        m.add_command(label="יציאה", command=on_close)
+        m.add_command(label=tr("יציאה", "Exit"), command=on_close)
         try:
             m.tk_popup(event.x_root, event.y_root)
         finally:
@@ -399,10 +447,10 @@ def run_dock_main(args: object) -> None:
         snap = collect_snapshot(disk_path)
         history.log(snap)
 
-        lbl_cpu.config(text=f"CPU  {snap.cpu_percent:.0f}%  ·  {snap.cpu_logical} ליבות")
+        lbl_cpu.config(text=f"CPU  {snap.cpu_percent:.0f}%  ·  {snap.cpu_logical} " + tr("ליבות", "cores"))
         temp_parts: list[str] = []
         if snap.temp_celsius is not None:
-            temp_parts.append(f"מחשב {snap.temp_celsius:.0f}°C")
+            temp_parts.append(tr("מחשב", "CPU") + f" {snap.temp_celsius:.0f}°C")
         gt = read_gpu_temp_celsius()
         if gt is not None:
             temp_parts.append(f"GPU {gt:.0f}°C")
@@ -413,7 +461,7 @@ def run_dock_main(args: object) -> None:
                 temp_parts.append(f"VRAM {used_mib/1024:.1f}/{total_mib/1024:.1f} GiB")
             else:
                 temp_parts.append(f"VRAM {used_mib}/{total_mib} MiB")
-        lbl_temp.config(text=" · ".join(temp_parts) if temp_parts else "טמפ —")
+        lbl_temp.config(text=" · ".join(temp_parts) if temp_parts else tr("טמפ —", "Temp —"))
 
         d_pct = "—" if snap.disk_percent is None else f"{snap.disk_percent:.0f}%"
         short = snap.disk_path.rstrip("\\/") or snap.disk_path
@@ -421,12 +469,12 @@ def run_dock_main(args: object) -> None:
             short = short[:5] + "…"
         var_line2.set(
             f"RAM {snap.ram_percent:.0f}%  ({format_gib_usage(snap.ram_used, snap.ram_total)})  ·  "
-            f"דיסק {short}: {d_pct}"
+            + tr("דיסק", "Disk") + f" {short}: {d_pct}"
         )
 
         io = psutil.net_io_counters()
         now = time.time()
-        net_txt = "רשת …"
+        net_txt = tr("רשת …", "Net …")
         if net_last["t"] is not None and net_last["sent"] is not None and net_last["recv"] is not None:
             dt = now - float(net_last["t"])
             if dt > 0.05:
@@ -439,10 +487,10 @@ def run_dock_main(args: object) -> None:
 
         extras: list[str] = []
         if snap.swap_percent is not None:
-            extras.append(f"סוויפ {snap.swap_percent:.0f}%")
+            extras.append(tr("סוויפ", "Swap") + f" {snap.swap_percent:.0f}%")
         extras.append(net_txt)
         if snap.battery_percent is not None:
-            plug = "חשמל" if snap.battery_plugged else "סוללה"
+            plug = tr("חשמל", "AC") if snap.battery_plugged else tr("סוללה", "Battery")
             extras.append(f"{plug} {snap.battery_percent:.0f}%")
         var_line3.set("  ·  ".join(extras))
 

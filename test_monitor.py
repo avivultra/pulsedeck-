@@ -5,6 +5,12 @@ import json
 import tempfile
 import time
 import unittest
+
+import i18n
+
+# The assertions check the Hebrew UI text; pin the language so they pass on
+# an English machine (e.g. the CI runner) too.
+i18n.set_language("he")
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 

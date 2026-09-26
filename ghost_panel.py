@@ -15,18 +15,19 @@ import logging
 import time
 
 from ghost_sweeper import (
-    REASON_LABELS,
     VERDICT_COLORS,
-    VERDICT_LABELS,
     GhostProcess,
     get_default_sweeper,
     humanize_bytes,
     humanize_duration,
     persist_ignore,
     redact_cmdline,
+    reason_label,
     secrets_are_redacted,
     set_secrets_redacted,
+    verdict_label,
 )
+from i18n import ANCHOR, JUSTIFY, SIDE, SIDE_END, tr
 
 log = logging.getLogger(__name__)
 
@@ -82,7 +83,7 @@ def _open_clean_dialog(parent, ghosts, hogs, note: str, claude_note: str,
     from idle_cleanup import MIB, close_targets, verify_idle
 
     dlg = tk.Toplevel(parent)
-    dlg.title("נקה הכל — רק מה שלא פעיל")
+    dlg.title(tr("נקה הכל — רק מה שלא פעיל", "Clean all — idle only"))
     dlg.geometry("640x560")
     dlg.configure(bg=BG)
     try:
@@ -93,12 +94,16 @@ def _open_clean_dialog(parent, ghosts, hogs, note: str, claude_note: str,
 
     hdr = tk.Frame(dlg, bg=PANEL, padx=16, pady=10)
     hdr.pack(fill="x")
-    tk.Label(hdr, text="🧹 נקה הכל — רק מה שלא פעיל", bg=PANEL, fg=CLEAN,
-             font=("Segoe UI", 13, "bold"), anchor="e").pack(fill="x")
-    tk.Label(hdr, text="מה שפעיל לא מופיע כאן בכלל. לפני הסגירה כל תהליך נבדק "
-                       "שוב, ומה שהתעורר בינתיים — לא ייסגר.",
-             bg=PANEL, fg=DIM, font=("Segoe UI", 9), anchor="e",
-             justify="right", wraplength=600).pack(fill="x", pady=(3, 0))
+    tk.Label(hdr, text=tr("🧹 נקה הכל — רק מה שלא פעיל", "🧹 Clean all — idle only"),
+             bg=PANEL, fg=CLEAN,
+             font=("Segoe UI", 13, "bold"), anchor=ANCHOR()).pack(fill="x")
+    tk.Label(hdr, text=tr("מה שפעיל לא מופיע כאן בכלל. לפני הסגירה כל תהליך נבדק "
+                          "שוב, ומה שהתעורר בינתיים — לא ייסגר.",
+                          "Anything active is not listed here at all. Each process is "
+                          "checked again before closing, and whatever woke up meanwhile "
+                          "will not be closed."),
+             bg=PANEL, fg=DIM, font=("Segoe UI", 9), anchor=ANCHOR(),
+             justify=JUSTIFY(), wraplength=600).pack(fill="x", pady=(3, 0))
 
     holder = tk.Frame(dlg, bg=BG)
     holder.pack(fill="both", expand=True)
@@ -117,15 +122,17 @@ def _open_clean_dialog(parent, ghosts, hogs, note: str, claude_note: str,
     def _update_summary() -> None:
         chosen = [t for v, t in checks if v.get()]
         mb = sum(t.rss_bytes for t in chosen) // MIB
-        summary_var.set(f"נבחרו {len(chosen)}  ·  ישתחררו כ-{mb:,} MB")
+        summary_var.set(tr(f"נבחרו {len(chosen)}  ·  ישתחררו כ-{mb:,} MB",
+                           f"{len(chosen)} selected  ·  about {mb:,} MB will be freed"))
         go_btn.config(state="normal" if chosen else "disabled",
-                      text=f"סגור את המסומנים ({len(chosen)})")
+                      text=tr(f"סגור את המסומנים ({len(chosen)})",
+                              f"Close selected ({len(chosen)})"))
 
     def _section(title: str, items) -> None:
         if not items:
             return
         tk.Label(body, text=title, bg=BG, fg=FG, font=("Segoe UI", 10, "bold"),
-                 anchor="e").pack(fill="x", pady=(8, 2), padx=6)
+                 anchor=ANCHOR()).pack(fill="x", pady=(8, 2), padx=6)
         for t in items:
             var = tk.BooleanVar(value=True)
             checks.append((var, t))
@@ -134,34 +141,36 @@ def _open_clean_dialog(parent, ghosts, hogs, note: str, claude_note: str,
             tk.Checkbutton(row, variable=var, command=_update_summary,
                            bg=PANEL_HI, activebackground=PANEL_HI,
                            selectcolor=PANEL, relief="flat", bd=0,
-                           highlightthickness=0).pack(side="right")
+                           highlightthickness=0).pack(side=SIDE())
             tk.Label(row, text=f"{t.name}  ·  {t.rss_bytes // MIB:,} MB  ·  PID {t.pid}",
                      bg=PANEL_HI, fg=FG, font=("Segoe UI", 10, "bold"),
-                     anchor="e").pack(side="top", fill="x")
+                     anchor=ANCHOR()).pack(side="top", fill="x")
             tk.Label(row, text=t.detail, bg=PANEL_HI, fg=DIM, font=("Segoe UI", 8),
-                     anchor="e", justify="right", wraplength=540
+                     anchor=ANCHOR(), justify=JUSTIFY(), wraplength=540
                      ).pack(side="top", fill="x")
 
-    _section("👻 תהליכים נטושים שסיימו", ghosts)
-    _section("💤 תופסים זיכרון ולא פעילים", hogs)
+    _section(tr("👻 תהליכים נטושים שסיימו", "👻 Abandoned processes that finished"),
+             ghosts)
+    _section(tr("💤 תופסים זיכרון ולא פעילים", "💤 Idle and holding memory"), hogs)
     if not ghosts and not hogs:
-        tk.Label(body, text="✓ אין כרגע שום דבר לא פעיל שכדאי לסגור",
+        tk.Label(body, text=tr("✓ אין כרגע שום דבר לא פעיל שכדאי לסגור",
+                               "✓ Nothing idle worth closing right now"),
                  bg=BG, fg=OK_FG, font=("Segoe UI", 11), pady=24).pack(fill="x")
     for text in (note, claude_note):
         if text:
             tk.Label(body, text=text, bg=BG, fg=DIM, font=("Segoe UI", 8),
-                     anchor="e", justify="right", wraplength=580
+                     anchor=ANCHOR(), justify=JUSTIFY(), wraplength=580
                      ).pack(fill="x", pady=(8, 0), padx=6)
 
     ftr = tk.Frame(dlg, bg=PANEL, padx=14, pady=10)
     ftr.pack(fill="x", side="bottom")
     tk.Label(ftr, textvariable=summary_var, bg=PANEL, fg=DIM,
-             font=("Segoe UI", 9), anchor="e").pack(side="top", fill="x", pady=(0, 6))
+             font=("Segoe UI", 9), anchor=ANCHOR()).pack(side="top", fill="x", pady=(0, 6))
     go_btn = tk.Button(ftr, bg=BAD, fg="white", font=("Segoe UI", 10, "bold"),
                        relief="flat", bd=0, cursor="hand2", padx=14, pady=6,
                        activebackground="#d94452", activeforeground="white")
     go_btn.pack(side="left")
-    cancel_btn = tk.Button(ftr, text="ביטול", bg=PANEL_HI, fg=FG,
+    cancel_btn = tk.Button(ftr, text=tr("ביטול", "Cancel"), bg=PANEL_HI, fg=FG,
                            font=("Segoe UI", 9), relief="flat", bd=0,
                            cursor="hand2", padx=12, pady=6, command=dlg.destroy)
     cancel_btn.pack(side="right")
@@ -169,29 +178,35 @@ def _open_clean_dialog(parent, ghosts, hogs, note: str, claude_note: str,
     def _show_results(result) -> None:
         for child in body.winfo_children():
             child.destroy()
-        cancel_btn.config(text="סגור")
+        cancel_btn.config(text=tr("סגור", "Close"))
         if isinstance(result, BaseException):
-            summary_var.set(f"הניקוי נכשל: {result}")
+            summary_var.set(tr(f"הניקוי נכשל: {result}", f"Cleanup failed: {result}"))
             return
         closed, skipped = result
         done = [t for t, outcome in closed if outcome in ("closed", "already_gone")]
         failed = [(t, o) for t, o in closed if o not in ("closed", "already_gone")]
         mb = sum(t.rss_bytes for t in done) // MIB
-        summary_var.set(f"✓ נסגרו {len(done)}  ·  שוחררו כ-{mb:,} MB")
+        summary_var.set(tr(f"✓ נסגרו {len(done)}  ·  שוחררו כ-{mb:,} MB",
+                           f"✓ Closed {len(done)}  ·  about {mb:,} MB freed"))
         for t in done:
-            tk.Label(body, text=f"✓ {t.name} (PID {t.pid}) — נסגר",
-                     bg=BG, fg=OK_FG, font=("Segoe UI", 9), anchor="e"
+            tk.Label(body, text=tr(f"✓ {t.name} (PID {t.pid}) — נסגר",
+                                   f"✓ {t.name} (PID {t.pid}) — closed"),
+                     bg=BG, fg=OK_FG, font=("Segoe UI", 9), anchor=ANCHOR()
                      ).pack(fill="x", padx=6)
         for t, why in skipped:
-            tk.Label(body, text=f"⏸ {t.name} (PID {t.pid}) — לא נסגר: {why}",
-                     bg=BG, fg=WARN_FG, font=("Segoe UI", 9), anchor="e"
+            tk.Label(body, text=tr(f"⏸ {t.name} (PID {t.pid}) — לא נסגר: {why}",
+                                   f"⏸ {t.name} (PID {t.pid}) — not closed: {why}"),
+                     bg=BG, fg=WARN_FG, font=("Segoe UI", 9), anchor=ANCHOR()
                      ).pack(fill="x", padx=6)
         for t, outcome in failed:
-            why = {"denied": "אין הרשאה (דרוש מנהל)",
-                   "protected": "תהליך מוגן",
-                   "pid_reused": "המספר עבר לתהליך אחר"}.get(outcome, outcome)
+            why = {"denied": tr("אין הרשאה (דרוש מנהל)",
+                                "access denied (administrator required)"),
+                   "protected": tr("תהליך מוגן", "protected process"),
+                   "pid_reused": tr("המספר עבר לתהליך אחר",
+                                    "the PID now belongs to another process"),
+                   }.get(outcome, outcome)
             tk.Label(body, text=f"✕ {t.name} (PID {t.pid}) — {why}",
-                     bg=BG, fg=BAD, font=("Segoe UI", 9), anchor="e"
+                     bg=BG, fg=BAD, font=("Segoe UI", 9), anchor=ANCHOR()
                      ).pack(fill="x", padx=6)
         on_finished()
 
@@ -199,9 +214,10 @@ def _open_clean_dialog(parent, ghosts, hogs, note: str, claude_note: str,
         chosen = [t for v, t in checks if v.get()]
         if not chosen:
             return
-        go_btn.config(state="disabled", text="בודק…")
+        go_btn.config(state="disabled", text=tr("בודק…", "Checking…"))
         cancel_btn.config(state="disabled")
-        summary_var.set("מוודא שכל תהליך עדיין לא פעיל (3 שניות)…")
+        summary_var.set(tr("מוודא שכל תהליך עדיין לא פעיל (3 שניות)…",
+                           "Making sure each process is still idle (3 seconds)…"))
 
         def _work():
             ok, skipped = verify_idle(chosen)
@@ -235,38 +251,50 @@ def _shorten(text: str, limit: int) -> str:
 def describe_parent(g: GhostProcess) -> str:
     """One line answering 'whose child was this?'."""
     if g.parent_alive:
-        return f"רץ תחת {g.parent_name} (PID {g.parent_pid}) — ההורה עדיין חי"
+        return tr(f"רץ תחת {g.parent_name} (PID {g.parent_pid}) — ההורה עדיין חי",
+                  f"Running under {g.parent_name} (PID {g.parent_pid}) — "
+                  f"the parent is still alive")
     name = g.parent_name if g.parent_name and g.parent_name != "?" else None
     when = humanize_duration(g.orphaned_for_seconds)
-    prefix = "לפחות " if g.orphan_time_is_lower_bound else ""
+    prefix = tr("לפחות ", "at least ") if g.orphan_time_is_lower_bound else ""
     if name:
-        return f"נוצר ע\"י {name} (PID {g.parent_pid}) — שנסגר לפני {prefix}{when}"
-    return (f"ההורה (PID {g.parent_pid}) נסגר לפני {prefix}{when} — "
-            f"הוא כבר לא היה קיים כשהמוניטור עלה, אז שמו לא ידוע")
+        return tr(f"נוצר ע\"י {name} (PID {g.parent_pid}) — שנסגר לפני {prefix}{when}",
+                  f"Started by {name} (PID {g.parent_pid}) — which exited "
+                  f"{prefix}{when} ago")
+    return tr(f"ההורה (PID {g.parent_pid}) נסגר לפני {prefix}{when} — "
+              f"הוא כבר לא היה קיים כשהמוניטור עלה, אז שמו לא ידוע",
+              f"The parent (PID {g.parent_pid}) exited {prefix}{when} ago — "
+              f"it was already gone when the monitor started, so its name is unknown")
 
 
 def describe_activity(g: GhostProcess) -> str:
     """One line answering 'did it finish, or is it stuck?'."""
-    prefix = "לפחות " if g.idle_time_is_lower_bound else ""
+    prefix = tr("לפחות ", "at least ") if g.idle_time_is_lower_bound else ""
     idle = humanize_duration(g.idle_for_seconds)
     cpu_life = f"{g.cpu_percent_lifetime:.2f}%"
     total = humanize_duration(g.cpu_seconds_total)
-    return (f"לא עשה כלום כבר {prefix}{idle}  ·  "
-            f"בכל חייו צרך {total} של CPU ({cpu_life} מליבה)")
+    return tr(f"לא עשה כלום כבר {prefix}{idle}  ·  "
+              f"בכל חייו צרך {total} של CPU ({cpu_life} מליבה)",
+              f"Idle for {prefix}{idle}  ·  "
+              f"used {total} of CPU over its whole life ({cpu_life} of a core)")
 
 
 def describe_resources(g: GhostProcess) -> str:
-    bits = [f"זיכרון {humanize_bytes(g.rss_bytes)}"]
+    bits = [tr(f"זיכרון {humanize_bytes(g.rss_bytes)}",
+               f"Memory {humanize_bytes(g.rss_bytes)}")]
     if abs(g.rss_delta_bytes) >= 1024 * 1024:
         sign = "+" if g.rss_delta_bytes > 0 else "−"
-        bits.append(f"שינוי {sign}{humanize_bytes(abs(g.rss_delta_bytes))} מאז המעקב")
+        bits.append(tr(f"שינוי {sign}{humanize_bytes(abs(g.rss_delta_bytes))} מאז המעקב",
+                       f"change {sign}{humanize_bytes(abs(g.rss_delta_bytes))} "
+                       f"since tracking began"))
     bits.append(f"{g.num_threads} threads")
     if g.listening_ports:
         ports = ", ".join(str(p) for p in g.listening_ports[:5])
         if len(g.listening_ports) > 5:
             ports += f" (+{len(g.listening_ports) - 5})"
-        bits.append(f"מאזין ל-{ports}")
-        bits.append(f"{g.established_connections} חיבורים פעילים")
+        bits.append(tr(f"מאזין ל-{ports}", f"listening on {ports}"))
+        bits.append(tr(f"{g.established_connections} חיבורים פעילים",
+                       f"{g.established_connections} active connections"))
     return "  ·  ".join(bits)
 
 
@@ -280,7 +308,7 @@ def open_ghost_panel(parent) -> object:
     sweeper = get_default_sweeper()
 
     win = tk.Toplevel(parent) if parent is not None else tk.Tk()
-    win.title("רוחות רפאים — תהליכים שננטשו")
+    win.title(tr("רוחות רפאים — תהליכים שננטשו", "Ghosts — abandoned processes"))
     win.geometry("760x620")
     win.configure(bg=BG)
     try:
@@ -291,11 +319,12 @@ def open_ghost_panel(parent) -> object:
     # ---- header ----
     hdr = tk.Frame(win, bg=PANEL, padx=18, pady=12)
     hdr.pack(fill="x")
-    tk.Label(hdr, text="👻 תהליכים שננטשו", bg=PANEL, fg=GHOST,
-             font=("Segoe UI", 15, "bold"), anchor="e").pack(fill="x")
-    subtitle_var = tk.StringVar(value="סורק…")
+    tk.Label(hdr, text=tr("👻 תהליכים שננטשו", "👻 Abandoned processes"),
+             bg=PANEL, fg=GHOST,
+             font=("Segoe UI", 15, "bold"), anchor=ANCHOR()).pack(fill="x")
+    subtitle_var = tk.StringVar(value=tr("סורק…", "Scanning…"))
     tk.Label(hdr, textvariable=subtitle_var, bg=PANEL, fg=DIM,
-             font=("Segoe UI", 9), anchor="e").pack(fill="x", pady=(3, 0))
+             font=("Segoe UI", 9), anchor=ANCHOR()).pack(fill="x", pady=(3, 0))
 
     # ---- scrollable body ----
     holder = tk.Frame(win, bg=BG)
@@ -343,9 +372,11 @@ def open_ghost_panel(parent) -> object:
 
     def _ignore_name(g: GhostProcess) -> None:
         if not messagebox.askyesno(
-            "התעלמות קבועה",
-            f"להתעלם מעכשיו מכל תהליך בשם {g.name}?\n\n"
-            f"אפשר לבטל בקובץ config.json תחת sweeper.ignored_names.",
+            tr("התעלמות קבועה", "Always ignore"),
+            tr(f"להתעלם מעכשיו מכל תהליך בשם {g.name}?\n\n"
+               f"אפשר לבטל בקובץ config.json תחת sweeper.ignored_names.",
+               f"Ignore every process named {g.name} from now on?\n\n"
+               f"You can undo this in config.json under sweeper.ignored_names."),
             parent=win,
         ):
             return
@@ -364,11 +395,11 @@ def open_ghost_panel(parent) -> object:
         line = tk.Frame(container, bg=PANEL_HI)
         line.pack(fill="x", pady=1)
         tk.Label(line, text=label, bg=PANEL_HI, fg=DIM,
-                 font=("Segoe UI", 8), width=10, anchor="e").pack(side="right")
+                 font=("Segoe UI", 8), width=10, anchor=ANCHOR()).pack(side=SIDE())
         font = ("Cascadia Mono", 8) if mono else ("Segoe UI", 9)
         tk.Label(line, text=value, bg=PANEL_HI, fg=fg, font=font,
-                 anchor="e", justify="right", wraplength=600
-                 ).pack(side="right", fill="x", expand=True, padx=(0, 8))
+                 anchor=ANCHOR(), justify=JUSTIFY(), wraplength=600
+                 ).pack(side=SIDE(), fill="x", expand=True, padx=(0, 8))
 
     def _card(g: GhostProcess, sibling_count: int) -> None:
         colour = VERDICT_COLORS.get(g.verdict, GHOST)
@@ -384,57 +415,70 @@ def open_ghost_panel(parent) -> object:
         # Title line: name + PID on the right, verdict chip on the left
         top = tk.Frame(content, bg=PANEL_HI)
         top.pack(fill="x")
-        tk.Label(top, text=VERDICT_LABELS.get(g.verdict, g.verdict),
+        tk.Label(top, text=verdict_label(g.verdict),
                  bg=colour, fg=BG, font=("Segoe UI", 8, "bold"),
-                 padx=7, pady=1).pack(side="left")
+                 padx=7, pady=1).pack(side=SIDE_END())
         tk.Label(top, text=f"{g.name}   ·   PID {g.pid}", bg=PANEL_HI, fg=FG,
-                 font=("Segoe UI", 12, "bold"), anchor="e"
-                 ).pack(side="right", fill="x", expand=True)
+                 font=("Segoe UI", 12, "bold"), anchor=ANCHOR()
+                 ).pack(side=SIDE(), fill="x", expand=True)
 
         # Why it was flagged
-        flags = "  ".join(f"[{REASON_LABELS.get(r, r)}]" for r in g.reasons)
+        flags = "  ".join(f"[{reason_label(r)}]" for r in g.reasons)
         tk.Label(content, text=flags, bg=PANEL_HI, fg=colour,
-                 font=("Segoe UI", 8), anchor="e").pack(fill="x", pady=(3, 6))
+                 font=("Segoe UI", 8), anchor=ANCHOR()).pack(fill="x", pady=(3, 6))
 
         # The verdict sentence — the thing the user actually reads
         tk.Label(content, text=g.verdict_detail, bg=PANEL_HI, fg=FG,
-                 font=("Segoe UI", 9), anchor="e", justify="right",
+                 font=("Segoe UI", 9), anchor=ANCHOR(), justify=JUSTIFY(),
                  wraplength=620).pack(fill="x", pady=(0, 7))
 
-        _row(content, "שושלת", describe_parent(g))
+        no_access = tr("— (אין גישה)", "— (no access)")
+        _row(content, tr("שושלת", "Lineage"), describe_parent(g))
         if sibling_count:
-            _row(content, "", f"עוד {sibling_count} תהליכים ננטשו מאותו הורה",
+            _row(content, "", tr(f"עוד {sibling_count} תהליכים ננטשו מאותו הורה",
+                                 f"{sibling_count} more processes were abandoned "
+                                 f"by the same parent"),
                  fg=DIM)
-        _row(content, "פעילות", describe_activity(g))
-        _row(content, "משאבים", describe_resources(g))
-        _row(content, "הופעל", f"לפני {humanize_duration(g.age_seconds)} "
-                               f"(בשעה {_fmt_clock(g.create_time)})")
-        _row(content, "תיקייה", g.cwd or "— (אין גישה)", mono=True)
+        _row(content, tr("פעילות", "Activity"), describe_activity(g))
+        _row(content, tr("משאבים", "Resources"), describe_resources(g))
+        _row(content, tr("הופעל", "Started"),
+             tr(f"לפני {humanize_duration(g.age_seconds)} "
+                f"(בשעה {_fmt_clock(g.create_time)})",
+                f"{humanize_duration(g.age_seconds)} ago "
+                f"(at {_fmt_clock(g.create_time)})"))
+        _row(content, tr("תיקייה", "Folder"), g.cwd or no_access, mono=True)
         # Redact before shortening, so a truncated secret can never survive
         # the ellipsis.
         cmd = g.cmdline
         if redact_var.get():
             cmd = redact_cmdline(cmd)
-        _row(content, "פקודה", _shorten(cmd, 200) or "— (אין גישה)", mono=True)
+        _row(content, tr("פקודה", "Command"), _shorten(cmd, 200) or no_access,
+             mono=True)
         if g.first_scan:
-            _row(content, "", "זמנים מסומנים כ\"לפחות\" — התהליך כבר רץ "
-                              "כשהמוניטור עלה, אז אלו הערכות תחתונות.", fg=DIM)
+            _row(content, "", tr("זמנים מסומנים כ\"לפחות\" — התהליך כבר רץ "
+                                 "כשהמוניטור עלה, אז אלו הערכות תחתונות.",
+                                 "Times marked \"at least\" — the process was already "
+                                 "running when the monitor started, so these are lower "
+                                 "bounds."), fg=DIM)
 
         # Actions
         actions = tk.Frame(content, bg=PANEL_HI)
         actions.pack(fill="x", pady=(9, 0))
-        tk.Button(actions, text="✕  סגור תהליך", bg=PANEL_HI, fg=BAD,
+        tk.Button(actions, text=tr("✕  סגור תהליך", "✕  Close process"),
+                  bg=PANEL_HI, fg=BAD,
                   font=("Segoe UI", 9, "bold"), relief="flat", bd=0,
                   activebackground=BAD, activeforeground="white",
                   cursor="hand2", padx=10, pady=3,
                   command=lambda gg=g: _close_ghost(gg)).pack(side="left")
-        tk.Button(actions, text="הסתר הפעם", bg=MUTED_BTN, fg=DIM,
+        tk.Button(actions, text=tr("הסתר הפעם", "Hide this time"),
+                  bg=MUTED_BTN, fg=DIM,
                   font=("Segoe UI", 8), relief="flat", bd=0,
                   activebackground=BORDER, activeforeground=FG,
                   cursor="hand2", padx=9, pady=3,
                   command=lambda gg=g: _ignore_instance(gg)
                   ).pack(side="left", padx=(8, 0))
-        tk.Button(actions, text=f"התעלם תמיד מ-{g.name}", bg=MUTED_BTN, fg=DIM,
+        tk.Button(actions, text=tr(f"התעלם תמיד מ-{g.name}", f"Always ignore {g.name}"),
+                  bg=MUTED_BTN, fg=DIM,
                   font=("Segoe UI", 8), relief="flat", bd=0,
                   activebackground=BORDER, activeforeground=FG,
                   cursor="hand2", padx=9, pady=3,
@@ -447,17 +491,23 @@ def open_ghost_panel(parent) -> object:
         ghosts = sweeper.get_ghosts()
 
         last = sweeper.last_scan_time()
-        when = f"נסרק ב-{_fmt_clock(last)}" if last else "טרם נסרק"
-        subtitle_var.set(
+        when = (tr(f"נסרק ב-{_fmt_clock(last)}", f"scanned at {_fmt_clock(last)}")
+                if last else tr("טרם נסרק", "not scanned yet"))
+        subtitle_var.set(tr(
             f"{len(ghosts)} תהליכים חשודים  ·  {when}  ·  "
-            f"שום דבר לא נסגר בלי אישור שלך"
-        )
+            f"שום דבר לא נסגר בלי אישור שלך",
+            f"{len(ghosts)} suspect processes  ·  {when}  ·  "
+            f"nothing is closed without your approval"
+        ))
 
         if not ghosts:
-            tk.Label(body, text="✓ לא נמצאו תהליכים נטושים",
+            tk.Label(body, text=tr("✓ לא נמצאו תהליכים נטושים",
+                                   "✓ No abandoned processes found"),
                      bg=BG, fg="#3fb950", font=("Segoe UI", 12), pady=30
                      ).pack(fill="x")
-            tk.Label(body, text="המטאטא ימשיך לסרוק ברקע וידווח כשמשהו יישאר תלוי.",
+            tk.Label(body, text=tr("המטאטא ימשיך לסרוק ברקע וידווח כשמשהו יישאר תלוי.",
+                                   "The sweeper keeps scanning in the background and "
+                                   "will report when something is left hanging."),
                      bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(fill="x")
             return
 
@@ -479,24 +529,25 @@ def open_ghost_panel(parent) -> object:
     ftr.pack(fill="x", side="bottom")
 
     def _rescan() -> None:
-        subtitle_var.set("סורק…")
+        subtitle_var.set(tr("סורק…", "Scanning…"))
         win.update_idletasks()
         sweeper.trigger_rescan()
         _refresh()
 
-    tk.Button(ftr, text="🔄 סרוק עכשיו", bg=GHOST, fg=BG,
+    tk.Button(ftr, text=tr("🔄 סרוק עכשיו", "🔄 Scan now"), bg=GHOST, fg=BG,
               font=("Segoe UI", 10, "bold"), relief="flat", bd=0,
               activebackground="#8b6fe8", activeforeground=BG,
               cursor="hand2", padx=14, pady=6, command=_rescan).pack(side="left")
 
-    clean_btn = tk.Button(ftr, text="🧹 נקה הכל", bg=PANEL_HI, fg=CLEAN,
+    clean_btn = tk.Button(ftr, text=tr("🧹 נקה הכל", "🧹 Clean all"),
+                          bg=PANEL_HI, fg=CLEAN,
                           font=("Segoe UI", 10, "bold"), relief="flat", bd=0,
                           activebackground=CLEAN, activeforeground=BG,
                           cursor="hand2", padx=14, pady=6)
     clean_btn.pack(side="left", padx=(8, 0))
 
     def _clean_all() -> None:
-        clean_btn.config(state="disabled", text="🧹 בודק…")
+        clean_btn.config(state="disabled", text=tr("🧹 בודק…", "🧹 Checking…"))
 
         def _gather():
             from idle_cleanup import (claude_sessions_note, ghost_targets,
@@ -508,9 +559,12 @@ def open_ghost_panel(parent) -> object:
             return ghosts, hogs, note, claude_sessions_note(taken)
 
         def _done(result) -> None:
-            clean_btn.config(state="normal", text="🧹 נקה הכל")
+            clean_btn.config(state="normal", text=tr("🧹 נקה הכל", "🧹 Clean all"))
             if isinstance(result, BaseException):
-                messagebox.showerror("נקה הכל", f"החיפוש נכשל:\n{result}", parent=win)
+                messagebox.showerror(tr("נקה הכל", "Clean all"),
+                                     tr(f"החיפוש נכשל:\n{result}",
+                                        f"The search failed:\n{result}"),
+                                     parent=win)
                 return
             _open_clean_dialog(win, *result, on_finished=_after_clean)
 
@@ -526,12 +580,13 @@ def open_ghost_panel(parent) -> object:
         _refresh()          # no rescan needed: masking is a display concern
 
     tk.Checkbutton(
-        ftr, text="🔒 הסתר סיסמאות וטוקנים בשורת הפקודה",
+        ftr, text=tr("🔒 הסתר סיסמאות וטוקנים בשורת הפקודה",
+                     "🔒 Mask passwords and tokens in the command line"),
         variable=redact_var, command=_toggle_redaction,
         bg=PANEL, fg=DIM, font=("Segoe UI", 9),
         activebackground=PANEL, activeforeground=FG,
         selectcolor=PANEL_HI, relief="flat", bd=0,
-        highlightthickness=0, cursor="hand2", anchor="e",
+        highlightthickness=0, cursor="hand2", anchor=ANCHOR(),
     ).pack(side="left", padx=(12, 0))
 
     def _open_log() -> None:
@@ -542,7 +597,7 @@ def open_ghost_panel(parent) -> object:
         except Exception:
             log.exception("Could not open the sweep log")
 
-    tk.Button(ftr, text="📄 יומן סריקות", bg=PANEL_HI, fg=DIM,
+    tk.Button(ftr, text=tr("📄 יומן סריקות", "📄 Scan log"), bg=PANEL_HI, fg=DIM,
               font=("Segoe UI", 9), relief="flat", bd=0,
               activebackground=BORDER, activeforeground=FG,
               cursor="hand2", padx=12, pady=6,
@@ -552,7 +607,7 @@ def open_ghost_panel(parent) -> object:
         _unbind_wheel()
         win.destroy()
 
-    tk.Button(ftr, text="סגור", bg=PANEL_HI, fg=FG,
+    tk.Button(ftr, text=tr("סגור", "Close"), bg=PANEL_HI, fg=FG,
               font=("Segoe UI", 9), relief="flat", bd=0, cursor="hand2",
               padx=12, pady=6, command=_close_window).pack(side="right")
     win.protocol("WM_DELETE_WINDOW", _close_window)

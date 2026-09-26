@@ -9,6 +9,7 @@ from pathlib import Path
 
 import psutil
 
+from i18n import tr
 from monitor import Snapshot
 
 # A spike is only reported when the machine is *entering* a load condition.
@@ -116,18 +117,22 @@ def _should_report(prev: Snapshot, curr: Snapshot) -> tuple[bool, str]:
     # Upward jumps — only when the post-jump value is in the "concerning" zone
     if d_cpu >= CPU_JUMP_PCT and curr.cpu_percent >= CPU_JUMP_FLOOR:
         reasons.append(
-            f"CPU עלה ב־{d_cpu:+.1f}% (מ־{prev.cpu_percent:.1f}% ל־{curr.cpu_percent:.1f}%)"
+            tr(f"CPU עלה ב־{d_cpu:+.1f}% (מ־{prev.cpu_percent:.1f}% ל־{curr.cpu_percent:.1f}%)",
+               f"CPU rose {d_cpu:+.1f}% (from {prev.cpu_percent:.1f}% to {curr.cpu_percent:.1f}%)")
         )
     if d_ram >= RAM_JUMP_PCT and curr.ram_percent >= RAM_JUMP_FLOOR:
         reasons.append(
-            f"RAM עלה ב־{d_ram:+.1f}% (מ־{prev.ram_percent:.1f}% ל־{curr.ram_percent:.1f}%)"
+            tr(f"RAM עלה ב־{d_ram:+.1f}% (מ־{prev.ram_percent:.1f}% ל־{curr.ram_percent:.1f}%)",
+               f"RAM rose {d_ram:+.1f}% (from {prev.ram_percent:.1f}% to {curr.ram_percent:.1f}%)")
         )
 
     # Sustained-high conditions (no jump required, the machine is hot)
     if curr.cpu_percent >= CPU_HIGH_ABS:
-        reasons.append(f"CPU גבוה במיוחד: {curr.cpu_percent:.1f}%")
+        reasons.append(tr(f"CPU גבוה במיוחד: {curr.cpu_percent:.1f}%",
+                          f"CPU very high: {curr.cpu_percent:.1f}%"))
     if curr.ram_percent >= RAM_HIGH_ABS and d_ram >= 2.0:
-        reasons.append(f"RAM גבוה: {curr.ram_percent:.1f}%")
+        reasons.append(tr(f"RAM גבוה: {curr.ram_percent:.1f}%",
+                          f"RAM high: {curr.ram_percent:.1f}%"))
 
     if not reasons:
         return False, ""
@@ -169,9 +174,11 @@ def maybe_append_spike_report(prev: Snapshot, curr: Snapshot, report_path: Path)
     parts: list[str] = []
     if is_new_file:
         parts.extend([
-            f"# דוח חריגות — {_dt.now().strftime('%Y-%m-%d')}",
+            tr(f"# דוח חריגות — {_dt.now().strftime('%Y-%m-%d')}",
+               f"# Spike report — {_dt.now().strftime('%Y-%m-%d')}"),
             "",
-            "כל אירוע מתועד עם שעה, סיבה, ומועמדים אפשריים מבין התהליכים.",
+            tr("כל אירוע מתועד עם שעה, סיבה, ומועמדים אפשריים מבין התהליכים.",
+               "Each event is logged with its time, reason, and likely suspects among the processes."),
             "",
             "---",
         ])
@@ -183,13 +190,16 @@ def maybe_append_spike_report(prev: Snapshot, curr: Snapshot, report_path: Path)
         f"- **RAM:** {prev.ram_percent:.1f}% → {curr.ram_percent:.1f}%",
     ])
     if curr.disk_percent is not None:
-        parts.append(f"- **דיסק:** {curr.disk_percent:.1f}%")
+        parts.append(tr(f"- **דיסק:** {curr.disk_percent:.1f}%",
+                        f"- **Disk:** {curr.disk_percent:.1f}%"))
     if curr.temp_celsius is not None:
-        parts.append(f"- **טמפרטורה:** {curr.temp_celsius:.1f}°C")
+        parts.append(tr(f"- **טמפרטורה:** {curr.temp_celsius:.1f}°C",
+                        f"- **Temperature:** {curr.temp_celsius:.1f}°C"))
     parts.extend(
         [
             "",
-            "**תהליכים עם זיכרון (RSS) גבוה** (מועמדים עיקריים לעומס RAM):",
+            tr("**תהליכים עם זיכרון (RSS) גבוה** (מועמדים עיקריים לעומס RAM):",
+               "**Processes with high memory (RSS)** (main suspects for RAM load):"),
             "",
         ]
     )
@@ -197,7 +207,8 @@ def maybe_append_spike_report(prev: Snapshot, curr: Snapshot, report_path: Path)
     parts.extend(
         [
             "",
-            "*סיכום אוטומטי — לעומסי CPU קצרים מומלץ גם Task Manager.*",
+            tr("*סיכום אוטומטי — לעומסי CPU קצרים מומלץ גם Task Manager.*",
+               "*Automatic summary — for short CPU spikes, Task Manager is also recommended.*"),
             "",
             "---",
         ]

@@ -131,7 +131,7 @@ Three core promises:
 ## Quick start
 
 ```bash
-git clone https://github.com/<your-user>/pulsedeck.git
+git clone https://github.com/avivultra/pulsedeck-.git pulsedeck
 cd pulsedeck
 pip install -r requirements.txt
 
@@ -150,6 +150,15 @@ python monitor.py --dock --tray --history --save-config
 
 On first run, `config.json` is created from `config.example.json`-style defaults
 and lives next to `monitor.py`.
+
+### Windows — one-click install
+
+Double-click **`Install.bat`**. It finds Python 3.10+ (the `py` launcher, the
+usual install folders, or whatever is on PATH including the Microsoft Store
+Python — each candidate is actually run, so the Store's "install Python" stub
+is skipped), installs the packages into that Python, and creates a
+**PulseDeck** desktop shortcut that starts that same Python, so the monitor
+never runs under an interpreter that lacks its packages.
 
 ### Windows launchers
 
@@ -291,7 +300,8 @@ Typical footprint: **~90 MB RAM, ~1 % CPU** (measured on an 8-thread laptop).
 pytest
 ```
 
-138 unit tests across `test_monitor.py`, `test_ghost_sweeper.py` and
+149 unit tests across `test_monitor.py`, `test_ghost_sweeper.py`,
+`test_i18n.py`, `test_hardware.py` and
 `test_idle_cleanup.py` (clean-all never offers or closes anything active,
 terminate outcomes, the freeze log, the WMI give-up).
 
@@ -342,7 +352,7 @@ keeps running.
 | Feature | Windows | Linux | macOS |
 |---|---|---|---|
 | Core monitoring | ✅ | ✅ | ✅ |
-| Dock (drag/pin/resize) | ✅ (Win32 taskbar geometry) | ✅ (sensible defaults) | ✅ (sensible defaults) |
+| Dock (drag/pin/resize) | ✅ (above the taskbar on any edge; remembers a spot on a second monitor while it is connected) | ✅ (sensible defaults) | ✅ (sensible defaults) |
 | System tray | ✅ | ✅ | ✅ |
 | Live chart | ✅ | ✅ | ✅ |
 | Spike toasts | ✅ | ✅ | ✅ |
@@ -350,6 +360,10 @@ keeps running.
 | **Ghost Sweeper** | ✅ | ✅ | ✅ |
 | **Desktop shortcut installer** | ✅ (`.lnk` via PowerShell) | ✅ (`.desktop` file) | Manual hint printed |
 | `Start-Monitor-Hidden.vbs` | ✅ | n/a (use `python monitor.py`) | n/a |
+
+**Windows 10 and 11 are the fully supported targets** — every feature is
+built and tested there. Linux and macOS run the core monitor, dock, tray and
+chart, but get far less testing; bug reports welcome.
 
 ### Fan control (Lenovo Legion — optional)
 
@@ -359,15 +373,22 @@ keeps running.
 - `fan_auto.py` is a standalone auto-controller: turns Extreme Cooling ON when
   GPU temp ≥ 50 °C and OFF below 43 °C (hysteresis, configurable via
   `--on`/`--off`). Run `python fan_auto.py --test` to verify the hotkey first.
-- **Lenovo Legion + Nerve Sense only.** On other machines the button simply
-  sends a hotkey that does nothing (harmless); everything else works normally.
+- **Shown only where it works.** The button appears when the machine is a
+  Lenovo with Nerve Center / Nerve Sense installed; on every other machine it
+  is hidden (the hotkey would otherwise land in whatever window has focus).
+  Override in `config.json`: `"hardware": {"fan_button": true | false | "auto"}`.
 
 ### Other notes
 
-- **UI is currently Hebrew** (developer is a Hebrew speaker). Strings are
-  centralised enough to localise — PRs welcome.
-- **`Start-Monitor.bat` / `.vbs`** assume Python is in standard
-  `%LocalAppData%\Programs\Python\` locations. Adjust if installed elsewhere.
+- **English and Hebrew UI.** The language follows the Windows display
+  language (Hebrew → Hebrew, anything else → English), with a right-to-left
+  layout for Hebrew. Switch any time from the dock's right-click menu
+  (🌐 שפה / Language) or set `"ui": {"language": "en" | "he" | "auto"}` in
+  `config.json`; it applies on the next start. Every string is written as
+  `tr("עברית", "English")` in place, so adding a language means extending
+  `i18n.py` — PRs welcome.
+- **`Start-Monitor.bat` / `.vbs`** try the usual Python locations and the `py`
+  launcher. The desktop shortcut made by `Install.bat` does not depend on them.
 
 ---
 

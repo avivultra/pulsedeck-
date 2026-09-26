@@ -30,38 +30,34 @@ echo.
 pause
 
 REM --- 1. Find Python -----------------------------------------------------
+REM Every candidate is actually run, not just checked for existence: when no
+REM Python is installed, Windows puts a Microsoft Store stub named python.exe
+REM on PATH that only opens the Store. A candidate counts when it runs and is
+REM 3.10+; it then prints its own full path, which is what we keep.
 set "PYTHON_EXE="
-for %%P in (
-  "%LocalAppData%\Programs\Python\Python314\python.exe"
-  "%LocalAppData%\Programs\Python\Python313\python.exe"
-  "%LocalAppData%\Programs\Python\Python312\python.exe"
-  "%LocalAppData%\Programs\Python\Python311\python.exe"
-  "%LocalAppData%\Programs\Python\Python310\python.exe"
-  "%ProgramFiles%\Python313\python.exe"
-  "%ProgramFiles%\Python312\python.exe"
-  "%ProgramFiles%\Python311\python.exe"
-) do (
-  if exist %%P (
-    set "PYTHON_EXE=%%P"
-    goto :have_python
-  )
-)
+set "PYTHONUTF8=1"
+set "_PYOUT=%TEMP%\pulsedeck_python.txt"
 
-REM Fall back to whatever is on PATH
-where python >nul 2>&1
-if %ERRORLEVEL% EQU 0 (
-  for /f "delims=" %%i in ('where python') do (
-    set "PYTHON_EXE=%%i"
-    goto :have_python
-  )
+REM a) The py launcher (python.org installer) knows every installed version.
+call :try_python py -3
+REM b) Usual per-user and all-users install folders (PATH is often missing).
+for %%V in (314 313 312 311 310) do (
+  call :try_python "%LocalAppData%\Programs\Python\Python%%V\python.exe"
+  call :try_python "%ProgramFiles%\Python%%V\python.exe"
 )
+REM c) Whatever is on PATH, including the Microsoft Store Python.
+for /f "delims=" %%i in ('where python 2^>nul') do call :try_python "%%i"
+for /f "delims=" %%i in ('where python3 2^>nul') do call :try_python "%%i"
+if exist "%_PYOUT%" del /q "%_PYOUT%"
+if defined PYTHON_EXE goto :have_python
 
 echo.
 echo ============================================================
-echo   ERROR: Python is not installed.
+echo   ERROR: Python 3.10 or newer is not installed.
 echo.
 echo   Please install Python 3.10 or newer from:
 echo     https://www.python.org/downloads/
+echo   (or from the Microsoft Store: search "Python 3.13")
 echo.
 echo   IMPORTANT: During installation, check the box
 echo   "Add Python to PATH" on the first screen.
@@ -71,6 +67,14 @@ echo ============================================================
 echo.
 pause
 exit /b 1
+
+:try_python
+REM Sets PYTHON_EXE to the interpreter's real path if %* runs and is 3.10+.
+if defined PYTHON_EXE exit /b 0
+%* -c "import sys; assert sys.version_info[:2] >= (3, 10); print(sys.executable)" > "%_PYOUT%" 2>nul
+if errorlevel 1 exit /b 0
+set /p PYTHON_EXE=<"%_PYOUT%"
+exit /b 0
 
 :have_python
 echo [1/4] Python found: !PYTHON_EXE!

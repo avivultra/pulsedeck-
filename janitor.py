@@ -14,6 +14,9 @@ from pathlib import Path
 
 import psutil
 
+import i18n
+from i18n import tr
+
 log = logging.getLogger(__name__)
 
 
@@ -321,7 +324,7 @@ def open_cleanup_panel(parent) -> "object":
     AMBER, BAD = "#ebcb8b", "#ff5c6c"
 
     win = tk.Toplevel(parent) if parent is not None else tk.Tk()
-    win.title("ניקוי תהליכים מיותרים")
+    win.title(tr("ניקוי תהליכים מיותרים", "Clean up idle processes"))
     win.geometry("560x460")
     win.configure(bg=BG)
     try:
@@ -332,11 +335,11 @@ def open_cleanup_panel(parent) -> "object":
     # Header
     hdr = tk.Frame(win, bg=PANEL, padx=18, pady=14)
     hdr.pack(fill="x")
-    tk.Label(hdr, text="🧹 ניקוי תהליכים מיותרים", bg=PANEL, fg=AMBER,
-             font=("Segoe UI", 14, "bold"), anchor="e").pack(fill="x")
+    tk.Label(hdr, text=tr("🧹 ניקוי תהליכים מיותרים", "🧹 Clean up idle processes"), bg=PANEL, fg=AMBER,
+             font=("Segoe UI", 14, "bold"), anchor=i18n.ANCHOR()).pack(fill="x")
     subtitle_var = tk.StringVar(value="")
     tk.Label(hdr, textvariable=subtitle_var, bg=PANEL, fg=DIM,
-             font=("Segoe UI", 9), anchor="e").pack(fill="x", pady=(4, 0))
+             font=("Segoe UI", 9), anchor=i18n.ANCHOR()).pack(fill="x", pady=(4, 0))
 
     # Body container
     body = tk.Frame(win, bg=BG, padx=14, pady=10)
@@ -344,16 +347,19 @@ def open_cleanup_panel(parent) -> "object":
 
     def _kill_one(group: ZombieGroup) -> None:
         if not messagebox.askyesno(
-            "אישור ניקוי",
-            f"להרוג {group.count} תהליכי conhost מההורה {group.parent_name} "
-            f"(PID {group.parent_pid})?",
+            tr("אישור ניקוי", "Confirm cleanup"),
+            tr(f"להרוג {group.count} תהליכי conhost מההורה {group.parent_name} "
+               f"(PID {group.parent_pid})?",
+               f"Kill {group.count} conhost processes from parent {group.parent_name} "
+               f"(PID {group.parent_pid})?"),
             parent=win,
         ):
             return
         killed, total = janitor.kill_group(group)
         messagebox.showinfo(
-            "ניקוי הושלם",
-            f"נוקו {killed}/{total} תהליכים מ-{group.parent_name}",
+            tr("ניקוי הושלם", "Cleanup complete"),
+            tr(f"נוקו {killed}/{total} תהליכים מ-{group.parent_name}",
+               f"Cleaned {killed}/{total} processes from {group.parent_name}"),
             parent=win,
         )
         _refresh()
@@ -364,8 +370,9 @@ def open_cleanup_panel(parent) -> "object":
         if total == 0:
             return
         if not messagebox.askyesno(
-            "אישור ניקוי כללי",
-            f"להרוג {total} תהליכי conhost מ-{len(groups)} הורים שונים?",
+            tr("אישור ניקוי כללי", "Confirm full cleanup"),
+            tr(f"להרוג {total} תהליכי conhost מ-{len(groups)} הורים שונים?",
+               f"Kill {total} conhost processes from {len(groups)} different parents?"),
             parent=win,
         ):
             return
@@ -373,8 +380,10 @@ def open_cleanup_panel(parent) -> "object":
         for g in groups:
             killed, _ = janitor.kill_group(g)
             total_killed += killed
-        messagebox.showinfo("ניקוי הושלם",
-                            f"נוקו {total_killed}/{total} תהליכים", parent=win)
+        messagebox.showinfo(tr("ניקוי הושלם", "Cleanup complete"),
+                            tr(f"נוקו {total_killed}/{total} תהליכים",
+                               f"Cleaned {total_killed}/{total} processes"),
+                            parent=win)
         _refresh()
 
     def _refresh() -> None:
@@ -382,10 +391,12 @@ def open_cleanup_panel(parent) -> "object":
             child.destroy()
         groups = janitor.get_groups()
         total = sum(g.count for g in groups)
-        subtitle_var.set(f"{len(groups)} קבוצות  ·  {total} תהליכים בסך הכל")
+        subtitle_var.set(tr(f"{len(groups)} קבוצות  ·  {total} תהליכים בסך הכל",
+                            f"{len(groups)} groups  ·  {total} processes in total"))
 
         if not groups:
-            tk.Label(body, text="✓ אין תהליכים מיותרים לזיהוי",
+            tk.Label(body, text=tr("✓ אין תהליכים מיותרים לזיהוי",
+                             "✓ No idle processes detected"),
                      bg=BG, fg="#3fb950", font=("Segoe UI", 11),
                      pady=40).pack(fill="x")
             return
@@ -404,17 +415,17 @@ def open_cleanup_panel(parent) -> "object":
             top.pack(fill="x")
             tk.Label(top, text=f"{g.parent_name}  ·  PID {g.parent_pid}",
                      bg=PANEL_HI, fg=FG, font=("Segoe UI", 11, "bold"),
-                     anchor="e").pack(side="right", fill="x", expand=True)
+                     anchor=i18n.ANCHOR()).pack(side="right", fill="x", expand=True)
 
             mib = g.total_rss_bytes / (1024 * 1024)
             tk.Label(content,
                      text=f"{g.count} conhost.exe  ·  ~{mib:.0f} MiB",
                      bg=PANEL_HI, fg=DIM, font=("Segoe UI", 9),
-                     anchor="e").pack(fill="x", pady=(2, 0))
+                     anchor=i18n.ANCHOR()).pack(fill="x", pady=(2, 0))
 
             action = tk.Frame(content, bg=PANEL_HI)
             action.pack(fill="x", pady=(6, 0))
-            tk.Button(action, text="✕  נקה הכל", bg=PANEL_HI, fg=BAD,
+            tk.Button(action, text=tr("✕  נקה הכל", "✕  Clean all"), bg=PANEL_HI, fg=BAD,
                       font=("Segoe UI", 9, "bold"), relief="flat", bd=0,
                       activebackground=BAD, activeforeground="white",
                       cursor="hand2", padx=10, pady=3,
@@ -423,17 +434,17 @@ def open_cleanup_panel(parent) -> "object":
     # Footer
     ftr = tk.Frame(win, bg=PANEL, padx=14, pady=10)
     ftr.pack(fill="x", side="bottom")
-    tk.Button(ftr, text="🧹 נקה את הכל", bg=AMBER, fg=BG,
+    tk.Button(ftr, text=tr("🧹 נקה את הכל", "🧹 Clean everything"), bg=AMBER, fg=BG,
               font=("Segoe UI", 10, "bold"), relief="flat", bd=0,
               activebackground="#d4b06b", activeforeground=BG,
               cursor="hand2", padx=14, pady=6,
               command=_kill_all).pack(side="left")
-    tk.Button(ftr, text="רענן", bg=PANEL_HI, fg=FG,
+    tk.Button(ftr, text=tr("רענן", "Refresh"), bg=PANEL_HI, fg=FG,
               font=("Segoe UI", 9), relief="flat", bd=0,
               activebackground=BORDER, activeforeground=FG,
               cursor="hand2", padx=12, pady=6,
               command=_refresh).pack(side="left", padx=(8, 0))
-    tk.Button(ftr, text="סגור", bg=PANEL_HI, fg=FG,
+    tk.Button(ftr, text=tr("סגור", "Close"), bg=PANEL_HI, fg=FG,
               font=("Segoe UI", 9), relief="flat", bd=0,
               activebackground=BAD, activeforeground="white",
               cursor="hand2", padx=12, pady=6,
