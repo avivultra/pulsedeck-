@@ -44,6 +44,7 @@ from dataclasses import dataclass
 
 import psutil
 
+import claude_sessions
 from i18n import tr
 
 log = logging.getLogger(__name__)
@@ -112,6 +113,17 @@ _SPINNING_PCT = 25.0     # burning a quarter core while orphaned = stuck loop
 _WORKING_PCT = 2.0       # anything above this is doing real (if light) work
 _LEAK_DELTA_BYTES = 50 * 1024 * 1024   # RSS growth that counts as a leak
 
+# Roles: a ghost that matches one of these is still shown (with a label that
+# says what it is) but is never offered by "clean all". Looking idle is exactly
+# what these processes do when they are healthy.
+ROLE_SERVER = "SERVER"            # runs from a folder the user listed as protected
+ROLE_APP_PART = "APP_PART"        # helper of an app that is still open
+ROLE_CLAUDE = "CLAUDE_SESSION"    # a Claude Code conversation waiting for input
+
+# Chromium / Electron helper processes carry this flag (renderer, GPU, network,
+# audio, crashpad...). With the main process alive they are part of an open app.
+_APP_HELPER_FLAG = re.compile(r"(?:^|\s)--type=\S+")
+
 
 # ---------------------------------------------------------------- data model
 
@@ -162,6 +174,10 @@ class GhostProcess:
     observed_seconds: float          # how long the sweeper has watched this pid
     first_scan: bool                 # True = numbers are lower bounds
 
+    role: str = ""                   # "" / ROLE_SERVER / ROLE_APP_PART / ROLE_CLAUDE
+    # Claude Code conversation title, for display only. Never logged.
+    session_title: str = ""
+
     @property
     def instance_key(self) -> str:
         """Stable identity for this exact process instance (survives PID reuse)."""
@@ -170,6 +186,11 @@ class GhostProcess:
     @property
     def is_orphan(self) -> bool:
         return "ORPHAN" in self.reasons
+
+    @property
+    def offer_in_clean_all(self) -> bool:
+        """Only plain FINISHED ghosts. Anything with a role is left alone."""
+        return self.verdict == "FINISHED" and not self.role
 
 
 @dataclass
@@ -400,11 +421,13 @@ class GhostSweeper:
         idle_seconds: float = 1800.0,            # 30 minutes
         ignored_names: frozenset[str] | None = None,
         ignored_instances: frozenset[str] | None = None,
+        server_dirs: tuple[str, ...] | None = None,
     ) -> None:
         self._scan_interval = max(60.0, float(scan_interval_seconds))
         self._idle_seconds = max(60.0, float(idle_seconds))
         self._ignored_names = set(ignored_names or ())
         self._ignored_instances = set(ignored_instances or ())
+        self._server_dirs = normalize_dirs(server_dirs or ())
 
         self._lock = threading.Lock()
         self._ghosts: list[GhostProcess] = []
@@ -498,14 +521,16 @@ class GhostSweeper:
                 # Command lines go to disk ALWAYS masked. The panel checkbox
                 # governs the screen only — a log file outlives the session and
                 # is far more likely to be copied around.
+                # The conversation title is display-only and never written.
                 audit.info(
                     "NEW %s pid=%d verdict=%s reasons=%s parent=%s(%d,%s) "
-                    "idle=%s age=%s cwd=%s cmd=%s",
+                    "idle=%s age=%s role=%s cwd=%s cmd=%s",
                     g.name, g.pid, g.verdict, "+".join(g.reasons),
                     g.parent_name, g.parent_pid,
                     "alive" if g.parent_alive else "dead",
                     _log_duration(g.idle_for_seconds),
                     _log_duration(g.age_seconds),
+                    g.role or "-",
                     g.cwd or "?", redact_cmdline(g.cmdline) or "?",
                 )
 
@@ -525,6 +550,16 @@ class GhostSweeper:
             )
         except Exception:
             log.exception("Could not write user action to the sweep log")
+
+    # ---- settings the panel needs ----
+
+    @property
+    def idle_seconds(self) -> float:
+        return self._idle_seconds
+
+    @property
+    def server_dirs(self) -> tuple[str, ...]:
+        return self._server_dirs
 
     # ---- ignore list ----
 
@@ -731,6 +766,15 @@ class GhostSweeper:
         if not _is_current_user(username):
             return None
 
+        role = role_of(name, exe, cmdline, cwd, parent_alive, track.parent_name,
+                       self._server_dirs)
+        title = ""
+        if role == ROLE_CLAUDE:
+            try:
+                title = claude_sessions.session_title(cmdline) or ""
+            except Exception:
+                log.debug("Could not read a Claude Code session title", exc_info=True)
+
         return GhostProcess(
             pid=pid, name=name, exe=exe, cmdline=cmdline, cwd=cwd,
             username=username,
@@ -750,6 +794,7 @@ class GhostSweeper:
             reasons=tuple(reasons), verdict=verdict, verdict_detail=detail,
             observed_seconds=observed,
             first_scan=first_scan or track.seen_scans <= 1,
+            role=role, session_title=title,
         )
 
     def _update_track(self, pid: int, name: str, create_time: float,
@@ -826,6 +871,62 @@ class GhostSweeper:
             self._do_scan()
         except Exception:
             log.exception("Manual ghost rescan failed")
+
+
+# ---------------------------------------------------------------- roles
+
+def normalize_dirs(dirs) -> tuple[str, ...]:
+    """Lower-case, backslashes, no trailing separator — the form _under() expects."""
+    out = []
+    for d in dirs:
+        d = str(d or "").strip().strip('"').replace("/", "\\").rstrip("\\").lower()
+        if d:
+            out.append(d)
+    return tuple(out)
+
+
+def _under(path: str, folder: str) -> bool:
+    """`path` is `folder` itself or inside it — not a sibling sharing a prefix."""
+    path = path.replace("/", "\\").rstrip("\\").lower()
+    return path == folder or path.startswith(folder + "\\")
+
+
+def protected_dir_of(cwd: str, cmdline: str, dirs: tuple[str, ...]) -> str | None:
+    """The protected folder this process runs from, or None.
+
+    Matched on the working folder OR on any path in the command line: an
+    elevated process (SecurityGuard's watchdog) hides its working folder from a
+    normal user, but its script path is still on its command line.
+    """
+    if not dirs:
+        return None
+    for folder in dirs:
+        if cwd and _under(cwd, folder):
+            return folder
+    text = (cmdline or "").replace("/", "\\").lower()
+    for folder in dirs:
+        idx = text.find(folder)
+        while idx != -1:
+            end = idx + len(folder)
+            before_ok = idx == 0 or text[idx - 1] in " \"'="
+            after_ok = end == len(text) or text[end] in "\\ \"'"
+            if before_ok and after_ok:
+                return folder
+            idx = text.find(folder, idx + 1)
+    return None
+
+
+def role_of(name: str, exe: str, cmdline: str, cwd: str, parent_alive: bool,
+            parent_name: str, server_dirs: tuple[str, ...]) -> str:
+    """Which kind of never-clean-all process this is, or "" for an ordinary one."""
+    if protected_dir_of(cwd, cmdline, server_dirs):
+        return ROLE_SERVER
+    if claude_sessions.is_claude_code(name, exe, cmdline):
+        return ROLE_CLAUDE
+    if (parent_alive and _APP_HELPER_FLAG.search(cmdline or "")
+            and (parent_name or "").lower() == (name or "").lower()):
+        return ROLE_APP_PART
+    return ""
 
 
 # ---------------------------------------------------------------- helpers
@@ -1013,7 +1114,7 @@ def get_default_sweeper(*, scan_interval_seconds: float | None = None,
     global _default_sweeper
     with _default_lock:
         if _default_sweeper is None:
-            interval, idle, names, instances = _config_values()
+            interval, idle, names, instances, servers = _config_values()
             _default_sweeper = GhostSweeper(
                 scan_interval_seconds=(scan_interval_seconds
                                        if scan_interval_seconds is not None
@@ -1021,6 +1122,7 @@ def get_default_sweeper(*, scan_interval_seconds: float | None = None,
                 idle_seconds=(idle_seconds if idle_seconds is not None else idle),
                 ignored_names=names,
                 ignored_instances=instances,
+                server_dirs=servers,
             )
             _default_sweeper.start()
         return _default_sweeper
@@ -1035,7 +1137,8 @@ def peek_default_sweeper() -> GhostSweeper | None:
     return _default_sweeper
 
 
-def _config_values() -> tuple[float, float, frozenset[str], frozenset[str]]:
+def _config_values() -> tuple[float, float, frozenset[str], frozenset[str],
+                             tuple[str, ...]]:
     try:
         import config as app_config
         cfg = (app_config.load_config().get("sweeper", {}) or {})
@@ -1046,7 +1149,8 @@ def _config_values() -> tuple[float, float, frozenset[str], frozenset[str]]:
     idle = float(cfg.get("idle_minutes", 30) or 30) * 60.0
     names = frozenset(str(n).lower() for n in (cfg.get("ignored_names") or []))
     instances = frozenset(str(k) for k in (cfg.get("ignored_instances") or []))
-    return interval, idle, names, instances
+    servers = normalize_dirs(cfg.get("server_cwds") or [])
+    return interval, idle, names, instances, servers
 
 
 def persist_ignore(*, name: str | None = None,

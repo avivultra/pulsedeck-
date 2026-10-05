@@ -15,6 +15,9 @@ import logging
 import time
 
 from ghost_sweeper import (
+    ROLE_APP_PART,
+    ROLE_CLAUDE,
+    ROLE_SERVER,
     VERDICT_COLORS,
     GhostProcess,
     get_default_sweeper,
@@ -118,6 +121,8 @@ def _open_clean_dialog(parent, ghosts, hogs, note: str, claude_note: str,
 
     checks: list[tuple[tk.BooleanVar, object]] = []
     summary_var = tk.StringVar()
+    mask = secrets_are_redacted()
+    no_access = tr("— (אין גישה)", "— (no access)")
 
     def _update_summary() -> None:
         chosen = [t for v, t in checks if v.get()]
@@ -146,6 +151,17 @@ def _open_clean_dialog(parent, ghosts, hogs, note: str, claude_note: str,
                      bg=PANEL_HI, fg=FG, font=("Segoe UI", 10, "bold"),
                      anchor=ANCHOR()).pack(side="top", fill="x")
             tk.Label(row, text=t.detail, bg=PANEL_HI, fg=DIM, font=("Segoe UI", 8),
+                     anchor=ANCHOR(), justify=JUSTIFY(), wraplength=540
+                     ).pack(side="top", fill="x")
+            # Where it runs from and what it runs: without these, ten rows of
+            # "python.exe" or "claude.exe" are indistinguishable.
+            cmd = redact_cmdline(t.cmdline) if mask else t.cmdline
+            tk.Label(row, text="📁 " + (t.cwd or no_access),
+                     bg=PANEL_HI, fg=FG, font=("Cascadia Mono", 8),
+                     anchor=ANCHOR(), justify=JUSTIFY(), wraplength=540
+                     ).pack(side="top", fill="x")
+            tk.Label(row, text="▶ " + (_shorten(cmd, 180) or no_access),
+                     bg=PANEL_HI, fg=DIM, font=("Cascadia Mono", 8),
                      anchor=ANCHOR(), justify=JUSTIFY(), wraplength=540
                      ).pack(side="top", fill="x")
 
@@ -277,6 +293,44 @@ def describe_activity(g: GhostProcess) -> str:
               f"בכל חייו צרך {total} של CPU ({cpu_life} מליבה)",
               f"Idle for {prefix}{idle}  ·  "
               f"used {total} of CPU over its whole life ({cpu_life} of a core)")
+
+
+def _app_name(g: GhostProcess) -> str:
+    import os
+    base = os.path.basename((g.exe or g.name or "").replace("/", "\\").split("\\")[-1])
+    return os.path.splitext(base)[0] or g.name
+
+
+def describe_role(g: GhostProcess) -> tuple[str, str] | None:
+    """(chip text, explanation) for a ghost with a role, else None."""
+    if g.role == ROLE_SERVER:
+        chip = tr("שרת", "Server") if g.listening_ports else tr("מוגן", "Protected")
+        return chip, tr("🛡 רץ מתיקייה מוגנת (sweeper.server_cwds) — לא מוצע לסגירה, "
+                        "גם לא ב\"נקה הכל\".",
+                        "🛡 Runs from a protected folder (sweeper.server_cwds) — never "
+                        "offered for closing, not even by \"Clean all\".")
+    if g.role == ROLE_APP_PART:
+        app = _app_name(g)
+        return (tr("רכיב של אפליקציה", "App component"),
+                tr(f"🧩 רכיב של {app} — האפליקציה פתוחה (PID {g.parent_pid}). "
+                   f"שקט זה מצב רגיל שלו; לא נכלל ב\"נקה הכל\".",
+                   f"🧩 Part of {app} — the app is open (PID {g.parent_pid}). "
+                   f"Being quiet is normal for it; not included in \"Clean all\"."))
+    if g.role == ROLE_CLAUDE:
+        return (tr("שיחת Claude", "Claude chat"),
+                tr("💬 שיחת Claude Code שמחכה להודעה — לא נכללת ב\"נקה הכל\". "
+                   "סגירה מכאן מנתקת את השיחה.",
+                   "💬 A Claude Code conversation waiting for a message — not included "
+                   "in \"Clean all\". Closing it here disconnects the conversation."))
+    return None
+
+
+def claude_context(g: GhostProcess) -> str:
+    """'💬 title  ·  📁 folder' — title only when the transcript had one."""
+    folder = f"📁 {g.cwd}" if g.cwd else ""
+    if g.session_title:
+        return f"💬 {g.session_title}" + (f"   ·   {folder}" if folder else "")
+    return folder
 
 
 def describe_resources(g: GhostProcess) -> str:
@@ -418,14 +472,31 @@ def open_ghost_panel(parent) -> object:
         tk.Label(top, text=verdict_label(g.verdict),
                  bg=colour, fg=BG, font=("Segoe UI", 8, "bold"),
                  padx=7, pady=1).pack(side=SIDE_END())
+        role = describe_role(g)
+        if role is not None:
+            tk.Label(top, text=role[0], bg=GHOST, fg=BG,
+                     font=("Segoe UI", 8, "bold"), padx=7, pady=1
+                     ).pack(side=SIDE_END(), padx=(0, 6))
         tk.Label(top, text=f"{g.name}   ·   PID {g.pid}", bg=PANEL_HI, fg=FG,
                  font=("Segoe UI", 12, "bold"), anchor=ANCHOR()
                  ).pack(side=SIDE(), fill="x", expand=True)
+
+        # Which conversation this claude.exe is — right under its name.
+        if g.role == ROLE_CLAUDE:
+            context = claude_context(g)
+            if context:
+                tk.Label(content, text=context, bg=PANEL_HI, fg=FG,
+                         font=("Segoe UI", 10, "bold"), anchor=ANCHOR(),
+                         justify=JUSTIFY(), wraplength=620).pack(fill="x", pady=(2, 0))
 
         # Why it was flagged
         flags = "  ".join(f"[{reason_label(r)}]" for r in g.reasons)
         tk.Label(content, text=flags, bg=PANEL_HI, fg=colour,
                  font=("Segoe UI", 8), anchor=ANCHOR()).pack(fill="x", pady=(3, 6))
+        if role is not None:
+            tk.Label(content, text=role[1], bg=PANEL_HI, fg=GHOST,
+                     font=("Segoe UI", 9), anchor=ANCHOR(), justify=JUSTIFY(),
+                     wraplength=620).pack(fill="x", pady=(0, 6))
 
         # The verdict sentence — the thing the user actually reads
         tk.Label(content, text=g.verdict_detail, bg=PANEL_HI, fg=FG,
@@ -464,12 +535,14 @@ def open_ghost_panel(parent) -> object:
         # Actions
         actions = tk.Frame(content, bg=PANEL_HI)
         actions.pack(fill="x", pady=(9, 0))
-        tk.Button(actions, text=tr("✕  סגור תהליך", "✕  Close process"),
-                  bg=PANEL_HI, fg=BAD,
-                  font=("Segoe UI", 9, "bold"), relief="flat", bd=0,
-                  activebackground=BAD, activeforeground="white",
-                  cursor="hand2", padx=10, pady=3,
-                  command=lambda gg=g: _close_ghost(gg)).pack(side="left")
+        # A protected server gets no close button at all.
+        if g.role != ROLE_SERVER:
+            tk.Button(actions, text=tr("✕  סגור תהליך", "✕  Close process"),
+                      bg=PANEL_HI, fg=BAD,
+                      font=("Segoe UI", 9, "bold"), relief="flat", bd=0,
+                      activebackground=BAD, activeforeground="white",
+                      cursor="hand2", padx=10, pady=3,
+                      command=lambda gg=g: _close_ghost(gg)).pack(side="left")
         tk.Button(actions, text=tr("הסתר הפעם", "Hide this time"),
                   bg=MUTED_BTN, fg=DIM,
                   font=("Segoe UI", 8), relief="flat", bd=0,
@@ -555,7 +628,12 @@ def open_ghost_panel(parent) -> object:
             from process_monitor import peek_default_sampler
             ghosts = ghost_targets(sweeper.get_ghosts())
             taken = {t.pid for t in ghosts}
-            hogs, note = idle_hog_targets(peek_default_sampler(), exclude_pids=taken)
+            # Every process the sweeper saw (ghost or not) is the sweeper's to
+            # judge; the hog search only looks at what it did not report.
+            taken |= {g.pid for g in sweeper.get_ghosts()}
+            hogs, note = idle_hog_targets(peek_default_sampler(), exclude_pids=taken,
+                                          min_idle=sweeper.idle_seconds,
+                                          protected_dirs=sweeper.server_dirs)
             return ghosts, hogs, note, claude_sessions_note(taken)
 
         def _done(result) -> None:

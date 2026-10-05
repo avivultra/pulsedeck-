@@ -168,15 +168,26 @@ look are all welcome as pull requests.
   that closes everything **provably idle and nothing active**:
   - ghosts judged *finished* (never *stuck*, *leaking* or *still working*)
   - idle memory hogs: your own processes holding ≥ 100 MB that have not used
-    ≥ 1 % of a core for 5 minutes, with no window on screen (their own or a
+    ≥ 1 % of a core for `sweeper.idle_minutes`, with no window on screen (their own or a
     parent's), no network activity, outside `C:\Windows`, and not security
     software, sync clients, password managers or dev runtimes. Same-name
     children (browser helpers) are judged together with their parent
-  - every item is listed with its RAM and can be unticked; after you confirm,
+  - every item is listed with its RAM, working folder and (masked) command
+    line, so two `python.exe` rows can be told apart, and can be unticked;
+    one confirmation covers the list; after you confirm,
     each one is **re-sampled for 3 seconds** and anything that woke up is
     skipped and reported, not closed
-  - open Claude Code sessions are never offered as hogs — a session waiting
-    for your next message looks idle but is in use
+  - three kinds of process are shown on their card but **never** included:
+    - **servers** — anything whose working folder or script path is inside a
+      folder listed in `sweeper.server_cwds`. Labelled *server* (listening on
+      a port) or *protected*, and offered no close button at all
+    - **parts of an open app** — Chromium/Electron helpers (`--type=…`) whose
+      parent app is still running
+    - **Claude Code conversations** — a session waiting for your next message
+      looks idle but is in use. The card shows the conversation's title and
+      folder so you know which one it is; only the title is read from the
+      transcript (nothing else, never written to the log), and if no title is
+      found only the folder is shown. These can be closed from their own card
 
 ### History
 - **CSV log** every second to `history/regular/metrics.csv`
@@ -279,6 +290,8 @@ Key sections:
 - `sweeper.redact_secrets` — mask passwords/tokens in displayed command lines
 - `sweeper.ignored_names` / `ignored_instances` — the panel's "ignore" buttons
   write here
+- `sweeper.server_cwds` — folders of servers / guards you keep running; their
+  processes are labelled and never offered for closing
 - `rotation.weeks_to_keep` — archive retention
 
 ---
@@ -304,6 +317,7 @@ monitor.py            ← entry point; sets up logging, config, dispatchers
 │                        toast, full alert window, safe try_terminate
 ├── janitor.py         ← conhost zombie scanner + cleanup panel
 ├── ghost_sweeper.py   ← abandoned-process detection (lineage + activity)
+├── claude_sessions.py ← Claude Code conversation title (title only)
 └── ghost_panel.py     ← the sweeper's report window
 ```
 
@@ -369,8 +383,9 @@ Typical footprint: **~90 MB RAM, ~1 % CPU** (measured on an 8-thread laptop).
 pytest
 ```
 
-149 unit tests across `test_monitor.py`, `test_ghost_sweeper.py`,
-`test_i18n.py`, `test_hardware.py` and
+174 unit tests across `test_monitor.py`, `test_ghost_sweeper.py`,
+`test_i18n.py`, `test_hardware.py`, `test_server_guard.py` (protected
+folders, app parts, conversation titles — all on fake processes) and
 `test_idle_cleanup.py` (clean-all never offers or closes anything active,
 terminate outcomes, the freeze log, the WMI give-up).
 

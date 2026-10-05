@@ -63,6 +63,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "ignored_names": [],
         # "pid:create_time" keys dismissed for this one instance only.
         "ignored_instances": [],
+        # Folders whose processes are servers / guards the user keeps running.
+        # Anything whose working folder or script path is inside one of these
+        # is shown with a "server" label and never offered for closing.
+        "server_cwds": [],
     },
     "janitor": {
         "enabled": True,

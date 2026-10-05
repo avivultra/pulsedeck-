@@ -64,6 +64,9 @@ class CleanupTarget:
     detail: str                     # Hebrew one-liner shown in the dialog
     member_pids: tuple[int, ...] = field(default_factory=tuple)
     ghost: object | None = None     # the GhostProcess, for the sweep log
+    # Shown in the dialog so every row says what it really is.
+    cwd: str = ""
+    cmdline: str = ""
 
 
 # ---------------------------------------------------------------- windows
@@ -175,11 +178,13 @@ def _fmt_minutes(seconds: float) -> str:
 # ---------------------------------------------------------------- candidates
 
 def ghost_targets(ghosts) -> list[CleanupTarget]:
-    """FINISHED ghosts only. Every other verdict is some form of 'active'."""
+    """FINISHED ghosts only. Every other verdict is some form of 'active', and
+    a ghost with a role (protected server, part of an open app, Claude Code
+    conversation) is never offered here — only from its own card."""
     windowed = visible_window_pids()
     out: list[CleanupTarget] = []
     for g in ghosts:
-        if g.verdict != "FINISHED" or g.pid in windowed:
+        if g.verdict != "FINISHED" or getattr(g, "role", "") or g.pid in windowed:
             continue
         out.append(CleanupTarget(
             pid=g.pid, name=g.name, create_time=g.create_time,
@@ -187,15 +192,32 @@ def ghost_targets(ghosts) -> list[CleanupTarget]:
             detail=tr(f"נטוש · לא עשה כלום {_fmt_minutes(g.idle_for_seconds or 0)}",
                       f"Abandoned · idle for {_fmt_minutes(g.idle_for_seconds or 0)}"),
             member_pids=(g.pid,), ghost=g,
+            cwd=getattr(g, "cwd", "") or "", cmdline=getattr(g, "cmdline", "") or "",
         ))
     return out
 
 
+def _read_or_blank(proc, attr: str) -> str:
+    try:
+        value = getattr(proc, attr)()
+    except Exception:
+        return ""
+    if isinstance(value, (list, tuple)):
+        return " ".join(value)
+    return value or ""
+
+
 def idle_hog_targets(sampler, *, exclude_pids: set[int] | None = None,
                      min_rss: int = MIN_HOG_RSS,
-                     min_idle: float = MIN_IDLE_SEC) -> tuple[list[CleanupTarget], str]:
-    """(targets, note). `note` explains an empty list when that is useful."""
-    from ghost_sweeper import INTERESTING_NAMES, NEVER_REPORT, _is_current_user
+                     min_idle: float = MIN_IDLE_SEC,
+                     protected_dirs: tuple[str, ...] = ()
+                     ) -> tuple[list[CleanupTarget], str]:
+    """(targets, note). `note` explains an empty list when that is useful.
+
+    `protected_dirs` (normalised, see ghost_sweeper.normalize_dirs): anything
+    running from one of these folders is never offered."""
+    from ghost_sweeper import (INTERESTING_NAMES, NEVER_REPORT, _is_current_user,
+                               protected_dir_of)
     from alerts import PROTECTED_NAMES
 
     if sampler is None:
@@ -255,6 +277,10 @@ def idle_hog_targets(sampler, *, exclude_pids: set[int] | None = None,
                 continue
             if any(p in windowed for p in (*member_pids, *_ancestor_pids(info.pid))):
                 continue
+            cwd = _read_or_blank(proc, "cwd")
+            cmdline = _read_or_blank(proc, "cmdline")
+            if protected_dir_of(cwd, cmdline, protected_dirs):
+                continue
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
         extra = (tr(f" (+{len(member_pids) - 1} תהליכי משנה)",
@@ -267,7 +293,7 @@ def idle_hog_targets(sampler, *, exclude_pids: set[int] | None = None,
                       f"בלי חלון ובלי רשת{extra}",
                       f"No CPU use for at least {_fmt_minutes(_idle_for(info))}, "
                       f"no window and no network{extra}"),
-            member_pids=member_pids,
+            member_pids=member_pids, cwd=cwd, cmdline=cmdline,
         ))
     out.sort(key=lambda t: t.rss_bytes, reverse=True)
     return out, ""
@@ -291,12 +317,12 @@ def claude_sessions_note(exclude_pids: set[int]) -> str:
             continue
     if count == 0:
         return ""
-    return tr(f"ℹ עוד {count} שיחות Claude Code פתוחות (~{rss // MIB} MB) לא נכללות — "
-              f"שיחה שמחכה לך נראית לא פעילה אבל היא בשימוש. רק שיחות שהמטאטא "
-              f"זיהה כנטושות נכללות למעלה. את השאר עדיף לסגור מתוך אפליקציית Claude.",
-              f"ℹ {count} more open Claude Code sessions (~{rss // MIB} MB) are not included — "
-              f"a session waiting for you looks idle but is in use. Only sessions the sweeper "
-              f"identified as abandoned are listed above. Close the rest from the Claude app.")
+    return tr(f"ℹ {count} שיחות Claude Code פתוחות (~{rss // MIB} MB) לא נכללות לעולם — "
+              f"שיחה שמחכה לך נראית לא פעילה אבל היא בשימוש. אפשר לסגור שיחה "
+              f"מהכרטיס שלה בחלון הרפאים (שם רואים את שם השיחה), או מתוך אפליקציית Claude.",
+              f"ℹ {count} open Claude Code sessions (~{rss // MIB} MB) are never included — "
+              f"a session waiting for you looks idle but is in use. Close one from its own "
+              f"card in the ghost panel (which shows its title), or from the Claude app.")
 
 
 # ---------------------------------------------------------------- verification
@@ -383,8 +409,9 @@ def _log_close(t: CleanupTarget, outcome: str) -> None:
     try:
         from ghost_sweeper import _get_sweep_logger
         _get_sweep_logger().info(
-            "USER clean-all %s: %s pid=%d kind=%s rss=%dMB (%s)",
-            outcome, t.name, t.pid, t.kind, t.rss_bytes // MIB, t.detail,
+            "USER clean-all %s: %s pid=%d kind=%s rss=%dMB cwd=%s (%s)",
+            outcome, t.name, t.pid, t.kind, t.rss_bytes // MIB, t.cwd or "?",
+            t.detail,
         )
     except Exception:
         log.exception("Could not write clean-all action to the sweep log")
