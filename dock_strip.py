@@ -12,6 +12,7 @@ import threading
 import time
 import tkinter as tk
 from pathlib import Path
+from types import SimpleNamespace
 
 import psutil
 
@@ -67,6 +68,35 @@ def _fmt_bps(bps: float) -> str:
     if kb < 1024:
         return f"{kb:.1f}KB/s"
     return f"{kb / 1024:.1f}MB/s"
+
+
+def build_dock_menu(root: tk.Misc, a: SimpleNamespace):
+    """The strip's right-click menu (dark_menu.DarkMenu): the same actions the
+    native menu had, grouped. `a` carries the current state and the actions."""
+    from dark_menu import DarkMenu
+
+    m = DarkMenu(root)
+    m.add_header("PulseDeck", a.usage)
+    m.add_group(tr("חלונות", "Windows"))
+    m.add_command(tr("מה קורה במחשב", "What's happening"), a.open_live_chart, icon="📊")
+    m.add_command(tr("זיהוי עומס / התראות", "Load events / alerts"), a.open_alerts, icon="🔔")
+    m.add_command(tr("שרתים פתוחים", "Open servers"), a.open_servers, icon="🖧")
+    m.add_command(tr("ניקוי תהליכים מיותרים", "Clean up leftover processes"), a.open_janitor, icon="🧹")
+    m.add_command(tr("תהליכים שננטשו", "Abandoned processes"), a.open_ghosts, icon="👻")
+    m.add_group(tr("תיעודים", "Records"))
+    m.add_command(tr("תיעודים רגילים", "Metrics history"), a.open_history, icon="📁")
+    m.add_command(tr("תיעודי חריגות", "Spike reports"), a.open_spikes, icon="📂")
+    m.add_group(tr("תצוגה", "Display"))
+    m.add_switch(tr("נעוץ למעלה", "Pinned on top"), a.pinned, a.toggle_pin, icon="📌")
+    m.add_stepper(tr("גודל גופן", "Font size"), a.font_smaller, a.font_larger, a.font_text, icon="Aa")
+    # Both languages in the label: findable by someone stuck in the other one.
+    m.add_choice("שפה / Language", [("auto", tr("אוטו", "Auto")), ("he", "עברית"), ("en", "English")],
+                 a.language, a.set_language, icon="🌍")
+    m.add_command(tr("אפס מיקום", "Reset position"), a.reset_position, icon="⟲")
+    m.add_separator()
+    m.add_command(tr("התקן קיצור בשולחן העבודה", "Install desktop shortcut"), a.install_shortcut, icon="🖥")
+    m.add_command(tr("יציאה", "Exit"), a.exit, icon="🚪", danger=True)
+    return m
 
 
 def run_dock_main(args: object) -> None:
@@ -347,22 +377,23 @@ def run_dock_main(args: object) -> None:
 
     def _install_desktop_shortcut() -> None:
         try:
+            from dark_menu import notice
             from install_shortcut import install_shortcut as _install
-            from tkinter import messagebox
             path = _install()
             if path is not None:
-                messagebox.showinfo(
+                notice(
+                    root,
                     tr("קיצור הותקן", "Shortcut installed"),
                     tr(f"נוצר קיצור בשולחן העבודה:\n{path}",
                        f"A desktop shortcut was created:\n{path}"),
-                    parent=root,
                 )
             else:
-                messagebox.showwarning(
+                notice(
+                    root,
                     tr("התקנה נכשלה", "Installation failed"),
                     tr("לא הצלחתי ליצור את הקיצור. ראה history/monitor.log",
                        "Could not create the shortcut. See history/monitor.log"),
-                    parent=root,
+                    warning=True,
                 )
         except Exception:
             log.exception("Desktop shortcut installation failed from dock menu")
@@ -377,7 +408,7 @@ def run_dock_main(args: object) -> None:
     def _set_language(code: str) -> None:
         """Persist the language choice. Applied on next start: every window
         builds its text once, so a live switch would leave half the UI stale."""
-        from tkinter import messagebox
+        from dark_menu import notice
         try:
             cfg = app_config.load_config()
             cfg.setdefault("ui", {})["language"] = code
@@ -385,66 +416,55 @@ def run_dock_main(args: object) -> None:
         except Exception:
             log.exception("Could not save the language choice")
             return
-        messagebox.showinfo(
+        notice(
+            root,
             "PulseDeck",
-            "השפה תתחלף בהפעלה הבאה של PulseDeck.\n\n"
+            "השפה תתחלף בהפעלה הבאה של PulseDeck.\n"
             "The language will change the next time PulseDeck starts.",
-            parent=root,
         )
 
+    def _language_setting() -> str:
+        try:
+            return str(app_config.load_config().get("ui", {}).get("language", "auto"))
+        except Exception:
+            return "auto"
+
+    open_menu: dict[str, object] = {"menu": None}
+
     def menu_popup(event: tk.Event) -> None:
-        m = tk.Menu(root, tearoff=0)
+        old = open_menu["menu"]
+        if old is not None:
+            old.close()  # type: ignore[attr-defined]
         try:
             from self_usage import format_self_usage, self_usage
-            m.add_command(label="PulseDeck: " + format_self_usage(*self_usage()),
-                          state="disabled")
-            m.add_separator()
+            usage = format_self_usage(*self_usage())
         except Exception:
             log.debug("self usage unavailable", exc_info=True)
-        m.add_command(label=tr("📊 מה קורה במחשב", "📊 What's happening"),
-                      command=_open_live_chart)
-        m.add_command(label=tr("🔔 זיהוי עומס / התראות", "🔔 Load events / alerts"),
-                      command=_open_alerts_panel)
-        m.add_command(label=tr("🌐 שרתים פתוחים", "🌐 Open servers"),
-                      command=_open_servers_panel)
-        m.add_command(label=tr("🧹 ניקוי תהליכים מיותרים", "🧹 Clean up leftover processes"),
-                      command=_open_janitor_panel)
-        m.add_command(label=tr("👻 תהליכים שננטשו", "👻 Abandoned processes"),
-                      command=_open_ghost_panel)
-        m.add_command(
-            label=tr("תיעודים רגילים", "Metrics history"),
-            command=lambda: _open_hist_folder(csv_path),
-        )
-        m.add_command(label=tr("תיעודי חריגות", "Spike reports"),
-                      command=_open_spikes_folder)
-        m.add_separator()
-        m.add_command(
-            label=(tr("📌 בטל נעיצה (כעת נעוץ)", "📌 Unpin (currently pinned)") if pinned
-                   else tr("📌 נעץ למעלה", "📌 Pin on top")),
-            command=_toggle_pin,
-        )
-        m.add_command(label=tr("הגדל גופן", "Larger font"),
-                      command=lambda: _bump_font(+0.1))
-        m.add_command(label=tr("הקטן גופן", "Smaller font"),
-                      command=lambda: _bump_font(-0.1))
-        m.add_command(label=tr("אפס מיקום", "Reset position"), command=_reset_position)
-        lang_menu = tk.Menu(m, tearoff=0)
-        for code, label in (("auto", tr("אוטומטי (לפי Windows)", "Automatic (follow Windows)")),
-                            ("he", "עברית"), ("en", "English")):
-            lang_menu.add_command(label=label, command=lambda c=code: _set_language(c))
-        m.add_cascade(label="🌐 שפה / Language", menu=lang_menu)
-        m.add_separator()
-        m.add_command(label=tr("📌 התקן קיצור בשולחן העבודה", "📌 Install desktop shortcut"),
-                      command=_install_desktop_shortcut)
-        m.add_separator()
-        m.add_command(label=tr("יציאה", "Exit"), command=on_close)
-        try:
-            m.tk_popup(event.x_root, event.y_root)
-        finally:
-            m.grab_release()
+            usage = ""
+        m = build_dock_menu(root, SimpleNamespace(
+            usage=usage, pinned=pinned, language=_language_setting(),
+            font_text=lambda: f"{font_scale:.0%}",
+            open_live_chart=_open_live_chart, open_alerts=_open_alerts_panel,
+            open_servers=_open_servers_panel, open_janitor=_open_janitor_panel,
+            open_ghosts=_open_ghost_panel, open_history=lambda: _open_hist_folder(csv_path),
+            open_spikes=_open_spikes_folder, toggle_pin=_toggle_pin,
+            font_smaller=lambda: _bump_font(-0.1), font_larger=lambda: _bump_font(+0.1),
+            set_language=_set_language, reset_position=_reset_position,
+            install_shortcut=_install_desktop_shortcut, exit=on_close,
+        ))
+        open_menu["menu"] = m
+        m.popup(event.x_root, event.y_root)
 
     root.bind("<Button-3>", menu_popup)
     root.bind("<Escape>", lambda _e: on_close())
+
+    def _warm_menu() -> None:
+        from dark_menu import warm_up
+        warm_up(root)
+
+    # The menu's one-time symbol lookup (~0.25 s) happens here, a little after
+    # start, instead of on the first right-click.
+    root.after(8000, _warm_menu)
 
     psutil.cpu_percent(interval=0.1)
     place_counter = 0

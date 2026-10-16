@@ -129,8 +129,9 @@ def build_tray_icon(
 
     menu = Menu(
         MenuItem(tr("📊 מה קורה במחשב", "📊 What's happening"), on_open_chart, default=True),
-        MenuItem(tr("🔔 זיהוי עומס / התראות", "🔔 Load detection / alerts"), on_open_alerts),
-        MenuItem(tr("תיקיית היסטוריה", "History folder"), on_open_folder),
+        MenuItem(tr("🔔 זיהוי עומס / התראות", "🔔 Load events / alerts"), on_open_alerts),
+        # Same folder and name as the strip's menu item.
+        MenuItem(tr("📁 תיעודים רגילים", "📁 Metrics history"), on_open_folder),
         Menu.SEPARATOR,
         MenuItem(tr("יציאה", "Exit"), on_quit),
     )

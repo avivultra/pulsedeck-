@@ -276,15 +276,14 @@ def _make_proc_card(parent: tk.Misc, proc: ProcessInfo, value_text: str,
 
     # Right-click anywhere on the card → mute menu for this process
     def _card_menu(event: tk.Event) -> None:
-        menu = tk.Menu(win, tearoff=0)
+        from dark_menu import DarkMenu
+        menu = DarkMenu(win)
         menu.add_command(
-            label=tr(f"🔇 השתק התראות עבור {proc.name}", f"🔇 Mute alerts for {proc.name}"),
-            command=lambda: mute_process_persist(proc.name, parent_widget=win),
+            tr(f"השתק התראות עבור {proc.name}", f"Mute alerts for {proc.name}"),
+            lambda: mute_process_persist(proc.name, parent_widget=win),
+            icon="🔇",
         )
-        try:
-            menu.tk_popup(event.x_root, event.y_root)
-        finally:
-            menu.grab_release()
+        menu.popup(event.x_root, event.y_root)
 
     for w in (inner, content, top, name_frame, action):
         w.bind("<Button-3>", _card_menu)
@@ -543,19 +542,18 @@ def _build_toast(event: AlertEvent, parent: tk.Misc | None,
     # Right-click context menu — Snooze options
     if on_snooze is not None:
         def _show_snooze_menu(event: tk.Event) -> None:
-            menu = tk.Menu(win, tearoff=0)
-            menu.add_command(label=tr("השהה התראות ל-15 דקות", "Snooze alerts for 15 minutes"),
-                             command=lambda: (on_snooze(15 * 60), _dismiss()))
-            menu.add_command(label=tr("השהה התראות ל-30 דקות", "Snooze alerts for 30 minutes"),
-                             command=lambda: (on_snooze(30 * 60), _dismiss()))
-            menu.add_command(label=tr("השהה התראות לשעה", "Snooze alerts for 1 hour"),
-                             command=lambda: (on_snooze(60 * 60), _dismiss()))
+            from dark_menu import DarkMenu
+            menu = DarkMenu(win, min_width=220)
+            menu.add_group(tr("השהה התראות", "Snooze alerts"))
+            menu.add_command(tr("ל-15 דקות", "For 15 minutes"),
+                             lambda: (on_snooze(15 * 60), _dismiss()), icon="⏸")
+            menu.add_command(tr("ל-30 דקות", "For 30 minutes"),
+                             lambda: (on_snooze(30 * 60), _dismiss()), icon="⏸")
+            menu.add_command(tr("לשעה", "For 1 hour"),
+                             lambda: (on_snooze(60 * 60), _dismiss()), icon="⏸")
             menu.add_separator()
-            menu.add_command(label=tr("סגור", "Close"), command=_dismiss)
-            try:
-                menu.tk_popup(event.x_root, event.y_root)
-            finally:
-                menu.grab_release()
+            menu.add_command(tr("סגור", "Close"), _dismiss, icon="✕")
+            menu.popup(event.x_root, event.y_root)
         # Bind on the toast body and labels
         for w in (inner, content, stripe, top_row, title_lbl):
             w.bind("<Button-3>", _show_snooze_menu)

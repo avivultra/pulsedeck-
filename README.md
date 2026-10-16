@@ -369,6 +369,7 @@ monitor.py            ← entry point; sets up logging, config, dispatchers
 ├── cpu_probes.py            ← psutil / Windows WMI / Linux thermal / macOS
 │
 ├── dock_strip.py     ← Tk dock UI (drag/resize/pin/font-scale)
+├── dark_menu.py      ← the dark right-click menus and message box (Windows' own are white)
 ├── tray_runner.py    ← pystray system-tray icon
 ├── vault_window.py   ← main window: Obsidian-style graph, notes, file tree
 ├── vault_graph.py    ← what the bubbles are + the force layout (no Tk)
@@ -456,14 +457,15 @@ Typical footprint: **~90 MB RAM, ~1 % CPU** (measured on an 8-thread laptop).
 pytest
 ```
 
-243 unit tests across `test_monitor.py`, `test_ghost_sweeper.py`,
+257 unit tests across `test_monitor.py`, `test_ghost_sweeper.py`,
 `test_i18n.py`, `test_hardware.py`, `test_pulsedeck_mcp.py` (MCP protocol,
 the command line, UTF-8 pipes, and the never-close rules — fake processes
 apart from one sleep process the test starts and closes itself), the
 window and history tests, `test_server_guard.py` (protected
 folders, app parts, conversation titles — all on fake processes) and
 `test_idle_cleanup.py` (clean-all never offers or closes anything active,
-terminate outcomes, the freeze log, the WMI give-up).
+terminate outcomes, the freeze log, the WMI give-up) and `test_dark_menu.py`
+(the strip's menu still offers every action; placement, keyboard).
 
 `test_ghost_sweeper.py` covers the sweeper (parent resolution under PID reuse,
 verdict classification, first-sighting estimates, cross-scan stability of
