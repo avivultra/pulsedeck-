@@ -197,6 +197,8 @@ SLEEP_BELOW = 0.003
 # Per step. 0.985 settles a reheat in ~4 s of animation; the old 0.992 crept
 # for ~20 s, and the graph changes more often than that, so it never rested.
 ALPHA_DECAY = 0.985
+SPREAD_MIN, SPREAD_MAX = 0.7, 3.5      # layout size multiplier (adapt_to)
+STRETCH_MIN, STRETCH_MAX = 0.6, 3.2    # width/height bias, for wide windows
 
 
 def pad_of(n: Node) -> float:
@@ -213,6 +215,10 @@ class Layout:
         self.nodes: dict[str, Node] = {}
         self.links: list[Link] = []
         self.alpha = 1.0
+        # Scale of the whole layout and its width/height bias; adapt_to()
+        # sets them from the canvas so the graph uses the room it has.
+        self.spread = 1.0
+        self.stretch = 1.0
         self.hidden_kinds: set[str] = set()
         self.hidden_links: set[str] = set()
 
@@ -278,13 +284,18 @@ class Layout:
 
     def step(self) -> None:
         alpha = self.alpha
+        s, st = self.spread, self.stretch
+        # Repulsion x s^2 with gravity / s scales the resting size by s; the
+        # gravity split between x and y by `st` makes it wider than tall.
+        repel = 5200 * s * s
+        gx, gy = 0.004 / (s * st ** 1.5), 0.004 * st ** 1.5 / s
         vis = self.visible_nodes()
         for i, a in enumerate(vis):
             for b in vis[i + 1:]:
                 dx, dy = b.x - a.x, b.y - a.y
                 d2 = dx * dx + dy * dy or 0.01
                 d = math.sqrt(d2)
-                f = 5200 / d2 * alpha
+                f = repel / d2 * alpha
                 fx, fy = dx / d * f, dy / d * f
                 a.vx -= fx
                 a.vy -= fy
@@ -294,7 +305,7 @@ class Layout:
             a, b = self.nodes[link.a], self.nodes[link.b]
             dx, dy = b.x - a.x, b.y - a.y
             d = math.hypot(dx, dy) or 0.01
-            rest = REST[link.type] - (link.w * 50 if link.type == "res" else 0) + (a.r + b.r) * 0.3
+            rest = (REST[link.type] - (link.w * 50 if link.type == "res" else 0) + (a.r + b.r) * 0.3) * s
             k = (0.012 + link.w * 0.03 if link.type == "res" else 0.04) * alpha
             f = (d - rest) * k
             fx, fy = dx / d * f, dy / d * f
@@ -303,8 +314,8 @@ class Layout:
             b.vx -= fx
             b.vy -= fy
         for n in vis:
-            n.vx -= n.x * 0.004 * alpha
-            n.vy -= n.y * 0.004 * alpha
+            n.vx -= n.x * gx * alpha
+            n.vy -= n.y * gy * alpha
             if n.pinned:
                 n.vx = n.vy = 0.0
                 continue
@@ -337,6 +348,27 @@ class Layout:
             self.step()
             if self.asleep:
                 break
+
+    def adapt_to(self, width: float, height: float, k: float) -> bool:
+        """Grow, shrink, widen or narrow the layout toward `width` x `height`
+        screen pixels at zoom `k`. Only once the layout has come to rest (its
+        size is meaningless mid-flight), damped, and with a dead band so it
+        settles instead of chasing itself. True if it changed (and reheated)."""
+        if self.alpha > 0.05:
+            return False
+        x0, y0, x1, y1 = self.bounds()
+        rx = width / k / max(1.0, x1 - x0)
+        ry = height / k / max(1.0, y1 - y0)
+        grow, wide = math.sqrt(rx * ry), math.sqrt(rx / ry)
+        if abs(math.log(grow)) < 0.1 and abs(math.log(wide)) < 0.1:
+            return False
+        spread = min(SPREAD_MAX, max(SPREAD_MIN, self.spread * grow ** 0.8))
+        stretch = min(STRETCH_MAX, max(STRETCH_MIN, self.stretch * wide ** 0.8))
+        if abs(spread - self.spread) < 0.01 and abs(stretch - self.stretch) < 0.01:
+            return False        # already at a limit
+        self.spread, self.stretch = spread, stretch
+        self.heat(0.15)
+        return True
 
     def bounds(self) -> tuple[float, float, float, float]:
         vis = self.visible_nodes() or [Node("pc", "pc", "", {}, 26)]

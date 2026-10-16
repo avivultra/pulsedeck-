@@ -50,6 +50,15 @@ MONO = "Consolas"
 
 REFRESH_MS = 2000
 FRAME_MS = 33
+FIT_MARGIN = 36        # px kept free around the graph when fitting
+FIT_K_MAX = 1.6
+FIT_K_SNAP = 0.06      # auto view re-zooms only when off by more than this
+
+
+def room_k(canvas_height: int) -> float:
+    """Bubble zoom to aim for: bigger on a taller canvas, the rest of the room
+    is filled by spreading the layout (Layout.adapt_to), not by giant bubbles."""
+    return min(1.5, max(0.9, canvas_height / 700))
 _PROTECTED_CLOSE = {"explorer", "msmpeng", "pulsedeck", "csrss", "wininit", "winlogon",
                     "services", "lsass", "smss", "dwm", "svchost"}
 
@@ -146,6 +155,9 @@ class VaultWindow:
         self._snap = None
         self._animating = False
         self._fitted = False
+        # The view follows the graph (fits it to the canvas) until the user
+        # zooms or pans; "⤢ Fit", the graph button and F11 hand it back.
+        self._auto_view = True
         self._lines: list[int] = []          # reusable line items, one per visible link
         self._drawn: dict[int, dict] = {}    # canvas item -> what was last sent to Tk
 
@@ -223,7 +235,7 @@ class VaultWindow:
         self._build_controls()
         self._build_status()
         c = self.canvas
-        c.bind("<Configure>", lambda _e: self.render())
+        c.bind("<Configure>", self._on_resize)
         c.bind("<ButtonPress-1>", self._on_press)
         c.bind("<B1-Motion>", self._on_drag)
         c.bind("<ButtonRelease-1>", self._on_release)
@@ -387,6 +399,8 @@ class VaultWindow:
         self._fill_tree()
         if self.selected is None or self.selected == "pc":
             self.show_note(self.selected)
+        self._adapt_room()
+        self._follow()
         self.render()
         self._kick()
 
@@ -434,17 +448,85 @@ class VaultWindow:
         v = self.view
         return (sx - w / 2 - v["x"]) / v["k"], (sy - h / 2 - v["y"]) / v["k"]
 
-    def fit(self) -> None:
+    def _fit_target(self) -> tuple[float, float, float] | None:
+        """(k, x, y) that shows the whole graph, or None before the canvas has a size."""
         x0, y0, x1, y1 = self.layout.bounds()
         w, h = self._size()
         if w < 50:
+            return None
+        k = min(FIT_K_MAX, max(0.35, min((w - 2 * FIT_MARGIN) / (x1 - x0),
+                                         (h - 2 * FIT_MARGIN) / (y1 - y0))))
+        return k, -(x0 + x1) / 2 * k, -(y0 + y1) / 2 * k
+
+    def fit(self) -> None:
+        """Show the whole graph now, and keep following it (auto view)."""
+        self._auto_view = True
+        w, h = self._size()
+        if w >= 50 and self.drag is None:
+            # Converge the layout to this canvas off-screen (a few hundred
+            # physics steps, bounded in time) so it opens already spread out.
+            deadline = time.perf_counter() + 0.35
+            while time.perf_counter() < deadline:
+                self.layout.settle(250)
+                if not self.layout.adapt_to(w - 2 * FIT_MARGIN, h - 2 * FIT_MARGIN, room_k(h)):
+                    break
+            self._kick()
+        target = self._fit_target()
+        if target is None:
             return
-        k = min(1.5, max(0.35, min(w / (x1 - x0 + 80), h / (y1 - y0 + 80))))
-        self.view.update(k=k, x=-(x0 + x1) / 2 * k, y=-(y0 + y1) / 2 * k)
+        k, x, y = target
+        self.view.update(k=k, x=x, y=y)
         self._fitted = True
         self.render()
 
+    def _follow(self) -> None:
+        """Auto view: glide toward the fitted view as the graph moves.
+
+        The pan eases; the zoom only changes when it is off by more than
+        FIT_K_SNAP, because every new zoom level re-renders every bubble sprite.
+        """
+        if not self._auto_view or self.drag is not None:
+            return
+        target = self._fit_target()
+        if target is None:
+            return
+        k, x, y = target
+        v = self.view
+        if abs(k - v["k"]) > FIT_K_SNAP * v["k"]:
+            # Re-centre at the new zoom from where the old one was looking.
+            v["x"], v["y"] = v["x"] / v["k"] * k, v["y"] / v["k"] * k
+            v["k"] = k
+        else:
+            x, y = x / k * v["k"], y / k * v["k"]
+        v["x"] += (x - v["x"]) * 0.2
+        v["y"] += (y - v["y"]) * 0.2
+
+    def _adapt_room(self) -> None:
+        """Spread the layout to the canvas: on a big or wide window the graph
+        uses the room instead of sitting small in the middle (auto view only)."""
+        if not self._auto_view or self.drag is not None:
+            return
+        w, h = self._size()
+        if w < 50:
+            return
+        if self.layout.adapt_to(w - 2 * FIT_MARGIN, h - 2 * FIT_MARGIN, room_k(h)):
+            self._kick()
+
+    def _on_resize(self, _e=None) -> None:
+        self.render()
+        if self._auto_view:
+            # One re-fit once the resize settles, not one per Configure event.
+            if getattr(self, "_resize_job", None):
+                self.win.after_cancel(self._resize_job)
+            self._resize_job = self.win.after(250, self._refit_after_resize)
+
+    def _refit_after_resize(self) -> None:
+        self._resize_job = None
+        if self._auto_view:
+            self.fit()
+
     def _zoom(self, sx, sy, factor) -> None:
+        self._auto_view = False
         wx, wy = self.to_world(sx, sy)
         w, h = self._size()
         k = min(3.0, max(0.35, self.view["k"] * factor))
@@ -591,11 +673,14 @@ class VaultWindow:
             return
         if self.layout.asleep and self.drag is None:
             self._animating = False
+            self._adapt_room()           # may reheat and restart the animation
+            self._follow()
             self.render()
             return
         started = time.perf_counter()
         self.layout.step()
         self.layout.step()
+        self._follow()
         self.render()
         # Keep a steady frame rate: the next frame is due FRAME_MS after this
         # one started, not FRAME_MS after it finished.
@@ -647,6 +732,8 @@ class VaultWindow:
             self._hide_tip()
             self._kick()
         else:
+            if d["moved"]:
+                self._auto_view = False      # the user is placing the view now
             self.view["x"] = d["vx"] + e.x - d["x"]
             self.view["y"] = d["vy"] + e.y - d["y"]
             self.render()
@@ -734,6 +821,7 @@ class VaultWindow:
             self.filters[n.kind].set(True)
             self._apply_filters()
         k = self.view["k"]
+        self._auto_view = False
         self.view.update(x=-n.x * k, y=-n.y * k)
         self.select(key)
 

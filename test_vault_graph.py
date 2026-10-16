@@ -179,5 +179,57 @@ class RenderSendsOnlyChangesTest(unittest.TestCase):
         self.assertLess(steps / 60, 6.0)
 
 
+class UsesTheRoomTest(unittest.TestCase):
+    """On a big, wide canvas the layout spreads out (and wider than tall)
+    instead of sitting small in the middle; bubbles keep their size."""
+
+    def _graph(self):
+        progs = [ProgramGroup(f"p{i}", 0.0, int((0.1 + i * 0.3) * GB), 1 + i % 4) for i in range(14)]
+        res = [{"id": i, "label": i, "value": 50, "text": "50%", "sub": ""}
+               for i in ("cpu", "ram", "disk", "net", "temp")]
+        ghosts = [{"name": "node", "pid": 100 + i, "rss": 40 * MB, "idle": "1h", "parent": None} for i in range(8)]
+        events = [{"time": f"10:0{i}:00", "reason": "CPU", "suspects": ["p1"], "res": "cpu"} for i in range(6)]
+        layout = Layout()
+        layout.update(*build_graph(progs, res, ghosts, events, "pc"))
+        layout.settle(800)
+        return layout
+
+    def _adapt(self, layout, w, h, k):
+        for _ in range(12):
+            layout.settle(800)
+            if not layout.adapt_to(w, h, k):
+                break
+
+    def test_a_wide_screen_gets_a_wide_graph_that_fills_it(self):
+        layout = self._graph()
+        x0, y0, x1, y1 = layout.bounds()
+        before_w = x1 - x0
+        self._adapt(layout, 1250, 830, 1.3)            # a maximised 1080p window
+        x0, y0, x1, y1 = layout.bounds()
+        self.assertGreater(x1 - x0, before_w * 1.3)
+        self.assertGreater((x1 - x0) / (y1 - y0), 1.2)
+        fit = min(1250 / (x1 - x0), 830 / (y1 - y0))
+        self.assertGreater(fit, 1.3 * 0.85)            # filled at about the aimed zoom
+        self.assertTrue(all(n.r == m.r for n, m in zip(layout.nodes.values(), self._graph().nodes.values())))
+
+    def test_no_change_mid_flight_or_inside_the_dead_band(self):
+        layout = self._graph()
+        layout.heat(0.5)
+        self.assertFalse(layout.adapt_to(3000, 3000, 1.0))      # still moving: its size means nothing yet
+        layout.settle(5000)
+        x0, y0, x1, y1 = layout.bounds()
+        self.assertFalse(layout.adapt_to((x1 - x0) * 1.05, (y1 - y0) * 0.97, 1.0))
+        self.assertEqual((layout.spread, layout.stretch), (1.0, 1.0))
+
+    def test_still_no_overlaps_when_spread_and_stretched(self):
+        layout = self._graph()
+        self._adapt(layout, 1800, 900, 1.3)
+        layout.settle(3000)
+        vis = layout.visible_nodes()
+        for i, a in enumerate(vis):
+            for b in vis[i + 1:]:
+                self.assertGreaterEqual(math.hypot(a.x - b.x, a.y - b.y), pad_of(a) + pad_of(b), (a.key, b.key))
+
+
 if __name__ == "__main__":
     unittest.main()
