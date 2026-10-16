@@ -245,7 +245,9 @@ the folder PulseDeck lives in. Then, in any Claude Code session:
 `/pulsedeck status`, `/pulsedeck leftovers`, `/pulsedeck port 8080`,
 `/pulsedeck slow-at 14:30`. The skill summarises the answer and asks you
 before every close, naming the process; it never closes system processes,
-PulseDeck, editors or terminals.
+PulseDeck, editors or terminals. `python` commands run without a permission
+prompt while the skill is active (`allowed-tools: Bash(python *)`), so that
+chat approval is what stands before a close.
 
 **Always on — as an MCP server.** Run without arguments, the same script is
 an MCP server over stdio, started only while an agent is connected. Register

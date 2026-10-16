@@ -3,11 +3,14 @@ name: pulsedeck
 description: Ask PulseDeck what is running on this PC, what a project left behind, who used a port, or who slowed the PC at a given time.
 disable-model-invocation: true
 argument-hint: "[status | leftovers | port N | slow-at HH:MM]"
+allowed-tools: Bash(python *)
 ---
 
 # PulseDeck
 
 Run PulseDeck's command-line tool once and summarise the answer for the user **in Hebrew**.
+
+Run it with the Bash tool: `python ...` is pre-approved there, so the read-only commands need no permission prompt. The chat approval below is still required before any `close`.
 
 Script — always this full path, in double quotes (forward slashes work in Bash and PowerShell):
 `<PULSEDECK_DIR>/pulsedeck_mcp.py`
