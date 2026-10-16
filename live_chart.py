@@ -1,5 +1,5 @@
-"""Live performance chart — Tkinter window embedding matplotlib that
-auto-refreshes every few seconds. Replaces the static PNG view.
+"""The "What's happening" window (plain Tk, refreshes every few seconds) and
+the history data layer behind its timeline. Also hosts today's alerts panel.
 """
 from __future__ import annotations
 
@@ -9,7 +9,8 @@ import re
 import tkinter as tk
 from array import array
 from bisect import bisect_left
-from datetime import datetime
+import math
+from datetime import datetime, timedelta
 from pathlib import Path
 from tkinter import messagebox, ttk
 
@@ -24,6 +25,7 @@ log = logging.getLogger(__name__)
 _SPIKE_HEADING_RE = re.compile(r"^##\s*⚠\s*(\d{2}:\d{2}:\d{2})\s*—\s*(.+?)\s*$")
 _SPIKE_CPU_RE    = re.compile(r"^- \*\*CPU:\*\*\s*([\d.]+)%\s*→\s*([\d.]+)%")
 _SPIKE_RAM_RE    = re.compile(r"^- \*\*RAM:\*\*\s*([\d.]+)%\s*→\s*([\d.]+)%")
+_SPIKE_SUSPECT_RE = re.compile(r"^\d+\.\s+`([^`]+)`\s+—\s+(.+?)\s*$")
 
 
 def _trigger_to_color(reason: str) -> str:
@@ -162,7 +164,7 @@ def _read_today_spikes(spikes_dir: Path) -> list[dict]:
                         events.append(current)
                     current = {"time": m.group(1), "reason": m.group(2),
                                "cpu_before": 0.0, "cpu_after": 0.0,
-                               "ram_before": 0.0, "ram_after": 0.0}
+                               "ram_before": 0.0, "ram_after": 0.0, "suspects": []}
                     continue
                 if current is None:
                     continue
@@ -175,6 +177,10 @@ def _read_today_spikes(spikes_dir: Path) -> list[dict]:
                 if m:
                     current["ram_before"] = float(m.group(1))
                     current["ram_after"]  = float(m.group(2))
+                    continue
+                m = _SPIKE_SUSPECT_RE.match(line)
+                if m:
+                    current["suspects"].append((m.group(1), m.group(2)))
         if current:
             events.append(current)
     except OSError:
@@ -204,8 +210,8 @@ VRAM_C = "#eab308"   # yellow-500
 # The chart refreshes every couple of seconds while history grows by one row
 # per second. Everything below is shaped so a refresh costs the same whether
 # the file holds five minutes or a week: only the appended tail is ever parsed,
-# windows are found by binary search, and what reaches matplotlib is capped at
-# MAX_PLOT_POINTS (an 1100-px-wide chart cannot show more anyway).
+# windows are found by binary search, and what reaches the screen is capped at
+# about one point per pixel of chart width (more could not be seen anyway).
 
 # Metric key -> CSV column. cpu/ram are required for a row to count.
 _METRIC_COLUMNS = {
@@ -218,30 +224,29 @@ _METRIC_COLUMNS = {
 }
 _OPTIONAL = ("disk", "swap", "temps", "vram")
 
-# Points handed to matplotlib per line. Longer windows are reduced by taking
+# Default cap on points per line. Longer windows are reduced by taking
 # the max of each bucket, so a one-second spike in a 24-hour view still shows.
 MAX_PLOT_POINTS = 1500
-# How much of metrics.csv the open chart keeps at full resolution (about
-# 10 MB for two days). Older data is shown, per minute, via the archive toggle.
+# How much of metrics.csv the open window keeps at full resolution (about
+# 10 MB for two days; the longest range shown is 24 hours).
 LIVE_KEEP_DAYS = 2.0
-ARCHIVE_BUCKET_DAYS = 60.0 / 86400.0
 # Generous bytes-per-row, used to skip straight to the tail of a big file.
 _ROW_BYTES_ESTIMATE = 120
 
-_EPOCH = datetime(1970, 1, 1)   # matplotlib's default date epoch (>= 3.3)
+_EPOCH = datetime(1970, 1, 1)
 
 
 def _wall_days(dt: datetime) -> float:
-    """Naive local datetime -> matplotlib date number.
+    """Naive local datetime -> days since 1970 (local wall clock).
 
-    Same value mdates.date2num gives for a naive datetime, without its
-    per-call overhead; axis labels show the local time the row was written.
+    Wall-clock days, not UTC: axis labels show the local time the row was
+    written, and DST changes do not shift old rows.
     """
     return (dt - _EPOCH).total_seconds() / 86400.0
 
 
 class _Series:
-    """Parallel float arrays: `t` (matplotlib date numbers) + one per metric.
+    """Parallel float arrays: `t` (wall-clock days, see _wall_days) + one per metric.
 
     Missing optional values are NaN. array('d') keeps appends cheap and lets
     numpy view the data without copying.
@@ -391,100 +396,8 @@ def _bucket_max(t, cols: dict, starts):
     return t[starts], {k: np.fmax.reduceat(v, starts) for k, v in cols.items()}
 
 
-def _to_minutes(t, cols: dict):
-    """Collapse sorted numpy series to one point per ARCHIVE_BUCKET_DAYS."""
-    import numpy as np
-    if not len(t):
-        return t.copy(), {k: v.copy() for k, v in cols.items()}
-    bucket = np.floor(t / ARCHIVE_BUCKET_DAYS)
-    starts = np.flatnonzero(np.r_[True, bucket[1:] != bucket[:-1]])
-    return _bucket_max(t, cols, starts)
-
-
-class _ArchiveSeries:
-    """Per-minute view of everything older than the live reader holds.
-
-    Built on first use of the archive toggle (archive files + the older part
-    of metrics.csv the live reader skipped), extended as the live reader ages
-    points out, rebuilt only when the archive files change (daily rotation).
-    """
-
-    def __init__(self, history_dir: Path, live: _IncrementalSeriesReader) -> None:
-        self.history_dir = Path(history_dir)
-        self.live = live
-        self._signature: tuple | None = None
-        self.t = None
-        self.cols: dict = {}
-        live.on_drop = self._absorb
-
-    def _files(self) -> list[Path]:
-        from metric_history import ARCHIVE_PREFIX, ARCHIVE_SUFFIX
-        return sorted(self.history_dir.glob(f"{ARCHIVE_PREFIX}*{ARCHIVE_SUFFIX}"))
-
-    @staticmethod
-    def _sig(files: list[Path]) -> tuple:
-        out = []
-        for p in files:
-            try:
-                st = p.stat()
-            except OSError:
-                continue
-            out.append((p.name, st.st_size, st.st_mtime))
-        return tuple(out)
-
-    def get(self):
-        files = self._files()
-        sig = self._sig(files)
-        if self.t is None or sig != self._signature:
-            self._build(files)
-            self._signature = sig
-        return self.t, self.cols
-
-    def _build(self, files: list[Path]) -> None:
-        import numpy as np
-        live = self.live.series
-        live_start = live.t[0] if len(live) else float("inf")
-        parts_t, parts = [], {k: [] for k in _METRIC_COLUMNS}
-        # One file at a time, reduced to minutes right away: a quarter of
-        # per-second archives never sits in memory at once.
-        for src in files + [self.live.csv_path]:
-            s = _Series()
-            try:
-                with src.open("r", encoding="utf-8", newline="", errors="replace") as f:
-                    reader = csv.reader(f)
-                    header = next(reader, None)
-                    if header:
-                        s.extend_from_rows(reader, header)
-            except OSError:
-                log.exception("Failed to read history source %s", src)
-                continue
-            t, cols = s.view()
-            keep = t < live_start
-            order = np.argsort(t[keep], kind="stable")
-            mt, mcols = _to_minutes(t[keep][order], {k: v[keep][order] for k, v in cols.items()})
-            del t, cols
-            parts_t.append(mt)
-            for k in parts:
-                parts[k].append(mcols[k])
-        if not parts_t:
-            self.t, self.cols = np.empty(0), {k: np.empty(0) for k in _METRIC_COLUMNS}
-            return
-        t = np.concatenate(parts_t)
-        order = np.argsort(t, kind="stable")
-        self.t = t[order]
-        self.cols = {k: np.concatenate(v)[order] for k, v in parts.items()}
-
-    def _absorb(self, old: _Series) -> None:
-        if self.t is None:
-            return
-        import numpy as np
-        t, cols = _to_minutes(*old.view())
-        self.t = np.concatenate([self.t, t])
-        self.cols = {k: np.concatenate([self.cols[k], cols[k]]) for k in cols}
-
-
-def _window(t, cols: dict, start: float | None):
-    """Slice sorted numpy series to t >= start, then cap at MAX_PLOT_POINTS.
+def _window(t, cols: dict, start: float | None, max_points: int = MAX_PLOT_POINTS):
+    """Slice sorted numpy series to t >= start, then cap at `max_points`.
 
     Always returns fresh arrays (never views), plus the in-window point count
     before reduction.
@@ -495,338 +408,529 @@ def _window(t, cols: dict, start: float | None):
     t = t[lo:]
     cols = {k: v[lo:] for k, v in cols.items()}
     raw_n = len(t)
-    if raw_n > MAX_PLOT_POINTS:
-        step = -(-raw_n // MAX_PLOT_POINTS)
+    if raw_n > max_points:
+        step = -(-raw_n // max_points)
         t, cols = _bucket_max(t, cols, np.arange(0, raw_n, step))
     else:
         t, cols = t.copy(), {k: v.copy() for k, v in cols.items()}
     return t, cols, raw_n
 
 
-def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
-                    refresh_ms: int = 2000) -> tk.Toplevel | tk.Tk | None:
-    """Open the live chart window. Returns the window (or None on failure)."""
-    try:
-        import matplotlib
-        matplotlib.use("TkAgg")
-        import matplotlib.dates as mdates
+# ---------- "What's happening" window ----------
+#
+# One window that answers "why is my computer slow?": a plain-words verdict,
+# who is using the machine right now, a compact timeline with load events
+# marked, today's events with their suspects, and what PulseDeck itself costs.
+# Drawn with plain Tk widgets and one Canvas: no matplotlib, so opening it is
+# instant and a refresh costs a few milliseconds.
+
+GREEN = "#22c55e"
+AMBER = "#f59e0b"
+RED = "#ef4444"
+CPU_FILL = "#0c1a33"     # CPU_C blended into BG (Tk has no alpha)
+FONT = "Segoe UI"
+
+RANGE_OPTIONS: list[tuple[str, int]] = [
+    ("5m", 5), ("15m", 15), ("1h", 60), ("6h", 360), ("24h", 1440),
+]
+_REFRESH_MS = 2000
+_TOP_N = 5
+# Background processes that are never a useful answer to "who is using it".
+_NOT_A_SUSPECT = {"system idle process", "idle", "registry", "memory compression"}
+
+
+def _verdict(cpu: float, ram: float, temp: float | None) -> tuple[str, str, list[str]]:
+    """(color, headline, which resources are the problem) for the current state."""
+    problems: list[str] = []
+    issues: list[str] = []
+    if cpu >= 85:
+        problems.append(tr("המעבד עמוס מאוד", "The CPU is very busy"))
+        issues.append("cpu")
+    elif cpu >= 60:
+        problems.append(tr("המעבד די עסוק", "The CPU is fairly busy"))
+        issues.append("cpu")
+    if ram >= 90:
+        problems.append(tr("הזיכרון כמעט מלא", "Memory is almost full"))
+        issues.append("ram")
+    elif ram >= 80:
+        problems.append(tr("הזיכרון בשימוש גבוה", "Memory use is high"))
+        issues.append("ram")
+    if temp is not None and temp >= 85:
+        problems.append(tr("המחשב חם", "The computer is running hot"))
+    if not problems:
+        return GREEN, tr("הכל רגוע", "All calm"), issues
+    severe = cpu >= 85 or ram >= 90 or (temp is not None and temp >= 85)
+    return (RED if severe else AMBER), " · ".join(problems), issues
+
+
+def _group_by_name(procs) -> list[tuple[str, float, int, int]]:
+    """Fold same-name processes (browser tabs, Electron helpers) into one row.
+
+    Returns (name, cpu % of machine, rss bytes, process count), unsorted.
+    """
+    groups: dict[str, list] = {}
+    for p in procs:
+        key = p.name.lower()
+        if key in _NOT_A_SUSPECT:
+            continue
+        g = groups.get(key)
+        if g is None:
+            groups[key] = [p.name, p.cpu_percent, p.rss_bytes, 1]
+        else:
+            g[1] += p.cpu_percent
+            g[2] += p.rss_bytes
+            g[3] += 1
+    return [tuple(g) for g in groups.values()]
+
+
+def _fmt_bytes(n: int) -> str:
+    if n >= 1024 ** 3:
+        return f"{n / 1024 ** 3:.1f} GB"
+    return f"{n / 1024 ** 2:.0f} MB"
+
+
+def _days_to_datetime(d: float) -> datetime:
+    return _EPOCH + timedelta(days=float(d))
+
+
+# Tick spacing candidates (seconds) for the time axis; first one giving at
+# most six labels wins.
+_TICK_STEPS = (60, 120, 300, 600, 900, 1800, 3600, 7200, 10800, 21600, 43200)
+
+
+def _time_ticks(xmin: float, xmax: float) -> list[float]:
+    span = (xmax - xmin) * 86400
+    step = next((s for s in _TICK_STEPS if span / s <= 6), _TICK_STEPS[-1])
+    first = math.ceil(xmin * 86400 / step) * step
+    return [s / 86400 for s in range(int(first), int(xmax * 86400) + 1, step)]
+
+
+class _Timeline:
+    """CPU (area + line) and RAM (line) over time, 0–100 %, on one Canvas.
+
+    Items are created once and moved with coords(); only the handful of grid
+    and tick items are rebuilt per render. Hovering shows the values under
+    the cursor, and any load event near it.
+    """
+
+    PAD_L, PAD_R, PAD_T, PAD_B = 36, 12, 12, 22
+
+    def __init__(self, parent: tk.Misc) -> None:
+        self.c = tk.Canvas(parent, bg=BG, height=180, highlightthickness=0, bd=0)
+        c = self.c
+        self.area = c.create_polygon(0, 0, 0, 0, 0, 0, fill=CPU_FILL, outline="", state="hidden")
+        self.ram = c.create_line(0, 0, 0, 0, fill=RAM_C, width=1.5, state="hidden")
+        self.cpu = c.create_line(0, 0, 0, 0, fill=CPU_C, width=1.5, state="hidden")
+        self.vline = c.create_line(0, 0, 0, 0, fill=MUTED, dash=(2, 3), state="hidden")
+        self.tip_bg = c.create_rectangle(0, 0, 0, 0, fill=PANEL2, outline=GRID, state="hidden")
+        self.tip = c.create_text(0, 0, text="", fill=FG, anchor="nw",
+                                 font=(FONT, 9), state="hidden")
+        self.empty = c.create_text(0, 0, text=tr("ממתין לדגימות…", "Waiting for samples…"),
+                                   fill=DIM, font=(FONT, 11))
+        self._data: dict | None = None
+        c.bind("<Configure>", lambda _e: self._render())
+        c.bind("<Motion>", self._on_motion)
+        c.bind("<Leave>", lambda _e: self._hide_tip())
+
+    def plot(self, t, cols: dict, xmin: float, xmax: float,
+             events: list[tuple[float, str]]) -> None:
+        self._data = {"t": t, "cols": cols, "xmin": xmin, "xmax": xmax, "events": events}
+        self._render()
+
+    def clear(self) -> None:
+        self._data = None
+        self._render()
+
+    # -- geometry
+    def _size(self) -> tuple[int, int]:
+        return self.c.winfo_width(), self.c.winfo_height()
+
+    def _x(self, t, w: int):
+        d = self._data
+        return self.PAD_L + (t - d["xmin"]) / (d["xmax"] - d["xmin"]) * (w - self.PAD_L - self.PAD_R)
+
+    def _y(self, v, h: int):
+        return self.PAD_T + (1.0 - v / 100.0) * (h - self.PAD_T - self.PAD_B)
+
+    def plot_width(self) -> int:
+        return max(50, self._size()[0] - self.PAD_L - self.PAD_R)
+
+    def _render(self) -> None:
         import numpy as np
-        from matplotlib.backends.backend_tkagg import (
-            FigureCanvasTkAgg, NavigationToolbar2Tk,
-        )
-        from matplotlib.figure import Figure
-    except ImportError:
-        log.exception("matplotlib not installed; cannot open live chart")
+        c = self.c
+        w, h = self._size()
+        if w < 60 or h < 40:
+            return
+        c.delete("axis")
+        c.coords(self.empty, w / 2, h / 2)
+        y_base = self._y(0, h)
+        for v in (0, 25, 50, 75, 100):
+            y = self._y(v, h)
+            c.create_line(self.PAD_L, y, w - self.PAD_R, y, fill=GRID,
+                          dash=(1, 4) if v else (), tags="axis")
+            c.create_text(self.PAD_L - 6, y, text=f"{v}%" if v else "0", fill=MUTED,
+                          anchor="e", font=(FONT, 8), tags="axis")
+        d = self._data
+        if d is None or len(d["t"]) < 2:
+            for item in (self.area, self.cpu, self.ram):
+                c.itemconfigure(item, state="hidden")
+            c.itemconfigure(self.empty, state="normal")
+            c.tag_lower("axis")
+            return
+        c.itemconfigure(self.empty, state="hidden")
+        for tv in _time_ticks(d["xmin"], d["xmax"]):
+            x = float(self._x(tv, w))
+            c.create_text(x, h - self.PAD_B + 6, text=_days_to_datetime(tv).strftime("%H:%M"),
+                          fill=MUTED, anchor="n", font=(FONT, 8), tags="axis")
+        xs = self._x(d["t"], w)
+        for item, key in ((self.cpu, "cpu"), (self.ram, "ram")):
+            v = d["cols"][key]
+            ok = ~np.isnan(v)
+            if ok.sum() < 2:
+                c.itemconfigure(item, state="hidden")
+                continue
+            pts = np.column_stack((xs[ok], self._y(v[ok], h))).ravel().tolist()
+            c.coords(item, *pts)
+            c.itemconfigure(item, state="normal")
+            if key == "cpu":
+                c.coords(self.area, pts[0], y_base, *pts, pts[-2], y_base)
+                c.itemconfigure(self.area, state="normal")
+        for et, _label in d["events"]:
+            if d["xmin"] <= et <= d["xmax"]:
+                x = float(self._x(et, w))
+                c.create_polygon(x - 5, self.PAD_T - 2, x + 5, self.PAD_T - 2, x, self.PAD_T + 6,
+                                 fill=RED, outline="", tags="axis")
+                c.create_line(x, self.PAD_T + 6, x, y_base, fill=RED, dash=(1, 3), tags="axis")
+        c.tag_lower("axis")
+        c.tag_lower(self.area)
+
+    # -- hover
+    def _hide_tip(self) -> None:
+        for item in (self.vline, self.tip_bg, self.tip):
+            self.c.itemconfigure(item, state="hidden")
+
+    def _on_motion(self, e) -> None:
+        import numpy as np
+        d = self._data
+        w, h = self._size()
+        if d is None or len(d["t"]) < 2 or not (self.PAD_L <= e.x <= w - self.PAD_R):
+            self._hide_tip()
+            return
+        t = d["t"]
+        tv = d["xmin"] + (e.x - self.PAD_L) / (w - self.PAD_L - self.PAD_R) * (d["xmax"] - d["xmin"])
+        i = int(np.clip(np.searchsorted(t, tv), 1, len(t) - 1))
+        if abs(t[i - 1] - tv) < abs(t[i] - tv):
+            i -= 1
+        x = float(self._x(t[i], w))
+        cols = d["cols"]
+        lines = [_days_to_datetime(t[i]).strftime("%H:%M:%S"),
+                 f"CPU {cols['cpu'][i]:.0f}%   RAM {cols['ram'][i]:.0f}%"]
+        temp = cols["temps"][i]
+        if temp == temp:   # not NaN
+            lines[-1] += f"   {temp:.0f}°C"
+        for et, label in d["events"]:
+            if abs(float(self._x(et, w)) - e.x) <= 6:
+                lines.append("⚠ " + label)
+        c = self.c
+        c.coords(self.vline, x, self.PAD_T, x, self._y(0, h))
+        # bbox() of a hidden item is None, so show it before measuring.
+        for item in (self.vline, self.tip_bg, self.tip):
+            c.itemconfigure(item, state="normal")
+        c.itemconfigure(self.tip, text="\n".join(lines))
+        bx0, by0, bx1, by1 = c.bbox(self.tip)
+        tw = bx1 - bx0
+        tx = x + 12 if x + 12 + tw + 8 < w else x - 12 - tw
+        c.coords(self.tip, tx, self.PAD_T + 4)
+        bx0, by0, bx1, by1 = c.bbox(self.tip)
+        c.coords(self.tip_bg, bx0 - 6, by0 - 4, bx1 + 6, by1 + 4)
+        for item in (self.vline, self.tip_bg, self.tip):
+            c.tag_raise(item)
+
+
+def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
+                    refresh_ms: int = _REFRESH_MS) -> tk.Toplevel | tk.Tk | None:
+    """Open the "What's happening" window. Returns the window (or None on failure).
+
+    Kept under its historic name: the dock and tray menus call it.
+    """
+    import importlib.util
+    if importlib.util.find_spec("numpy") is None:   # the data layer needs it
+        log.error("numpy not installed; cannot open the window")
         return None
+    from monitor import collect_snapshot, disk_root_path
+    from self_usage import format_self_usage, self_usage
+    from temperature_readings import read_gpu_temp_celsius
 
     history_dir = Path(history_dir)
+    side, side_end, anchor = i18n.SIDE(), i18n.SIDE_END(), i18n.ANCHOR()
 
-    if parent is None:
-        win: tk.Toplevel | tk.Tk = tk.Tk()
-    else:
-        win = tk.Toplevel(parent)
-    win.title(tr("גרף ביצועים — חי", "Performance chart — live"))
-    win.geometry("1100x620")
+    win: tk.Toplevel | tk.Tk = tk.Tk() if parent is None else tk.Toplevel(parent)
+    win.title(tr("מה קורה במחשב", "What's happening"))
+    win.geometry("780x760")
+    win.minsize(560, 600)
     win.configure(bg=BG)
 
-    # Top control bar — slim, single hairline divider below
-    top = tk.Frame(win, bg=PANEL, padx=14, pady=8)
-    top.pack(fill="x")
-    tk.Frame(win, bg=GRID, height=1).pack(fill="x")  # hairline divider
+    def _label(master, text="", fg=FG, size=10, bold=False, bg=None, **kw) -> tk.Label:
+        return tk.Label(master, text=text, fg=fg, bg=bg or master["bg"],
+                        font=(FONT, size, "bold" if bold else "normal"), **kw)
 
-    include_archive = tk.BooleanVar(value=False)
-    show_disk = tk.BooleanVar(value=True)
-    show_swap = tk.BooleanVar(value=True)
-    show_temp = tk.BooleanVar(value=True)
-    show_vram = tk.BooleanVar(value=True)
-    paused = tk.BooleanVar(value=False)
+    def _section(title: str) -> tk.Frame:
+        outer = tk.Frame(win, bg=BG, padx=18)
+        outer.pack(fill="x", pady=(14, 0))
+        head = tk.Frame(outer, bg=BG)
+        head.pack(fill="x")
+        _label(head, title, fg=DIM, size=9, bold=True).pack(side=side)
+        outer.head = head  # type: ignore[attr-defined]
+        return outer
 
-    # Time window options (label, minutes — None = show all)
-    WINDOW_OPTIONS: list[tuple[str, int | None]] = [
-        (tr("5 דקות אחרונות", "Last 5 minutes"), 5),
-        (tr("15 דקות אחרונות", "Last 15 minutes"), 15),
-        (tr("שעה אחרונה", "Last hour"), 60),
-        (tr("6 שעות אחרונות", "Last 6 hours"), 360),
-        (tr("24 שעות אחרונות", "Last 24 hours"), 1440),
-        (tr("הכל", "All"), None),
-    ]
-    window_label = tk.StringVar(value=tr("15 דקות אחרונות", "Last 15 minutes"))
+    # ---- verdict header
+    header = tk.Frame(win, bg=PANEL, padx=18, pady=14)
+    header.pack(fill="x")
+    dot = tk.Canvas(header, width=14, height=14, bg=PANEL, highlightthickness=0, bd=0)
+    dot_item = dot.create_oval(1, 1, 13, 13, fill=GREEN, outline="")
+    dot.pack(side=side, padx=(0, 10) if side == "left" else (10, 0))
+    verdict_var = tk.StringVar(value=tr("בודק…", "Checking…"))
+    _label(header, textvariable=verdict_var, size=14, bold=True, anchor=anchor).pack(
+        side=side, fill="x", expand=True)
+    tk.Frame(win, bg=GRID, height=1).pack(fill="x")
 
-    def _check(parent_w, text: str, var: tk.BooleanVar) -> tk.Checkbutton:
-        return tk.Checkbutton(parent_w, text=text, variable=var,
-                              bg=PANEL, fg=DIM, selectcolor=PANEL2,
-                              activebackground=PANEL, activeforeground=FG,
-                              font=("Segoe UI", 9), bd=0, highlightthickness=0,
-                              command=lambda: redraw())
+    # ---- stat cards
+    cards_row = tk.Frame(win, bg=BG, padx=12)
+    cards_row.pack(fill="x", pady=(12, 0))
+    cards: dict[str, tuple[tk.StringVar, tk.StringVar]] = {}
+    for key, title, color in (("cpu", tr("מעבד", "CPU"), CPU_C),
+                              ("ram", tr("זיכרון", "Memory"), RAM_C),
+                              ("disk", tr("דיסק", "Disk"), DISK_C),
+                              ("temp", tr("טמפרטורה", "Temperature"), TEMP_C)):
+        card = tk.Frame(cards_row, bg=PANEL, padx=12, pady=10)
+        card.pack(side=side, fill="x", expand=True, padx=6)
+        tk.Frame(card, bg=color, height=2).pack(fill="x", pady=(0, 8))
+        _label(card, title, fg=DIM, size=9, anchor=anchor).pack(fill="x")
+        value, sub = tk.StringVar(value="—"), tk.StringVar(value="")
+        _label(card, textvariable=value, size=20, bold=True, anchor=anchor).pack(fill="x")
+        _label(card, textvariable=sub, fg=MUTED, size=8, anchor=anchor).pack(fill="x")
+        cards[key] = (value, sub)
 
-    # Right-side title (Hebrew)
-    tk.Label(top, text=tr("גרף ביצועים חי", "Live performance chart"), bg=PANEL, fg=FG,
-             font=("Segoe UI", 11, "bold"), anchor=i18n.ANCHOR()).pack(side=i18n.SIDE(), padx=(8, 0))
+    # ---- who is using the machine
+    who = _section(tr("מי משתמש במחשב עכשיו", "Who is using the computer right now"))
+    who_cols = tk.Frame(who, bg=BG)
+    who_cols.pack(fill="x", pady=(6, 0))
+    top_rows: dict[str, list[tuple[tk.StringVar, tk.StringVar]]] = {}
+    for key, title in (("cpu", tr("הכי הרבה מעבד", "Most CPU")),
+                       ("ram", tr("הכי הרבה זיכרון", "Most memory"))):
+        col = tk.Frame(who_cols, bg=PANEL, padx=12, pady=8)
+        col.pack(side=side, fill="both", expand=True, padx=(0, 6) if key == "cpu" else (6, 0))
+        _label(col, title, fg=CPU_C if key == "cpu" else RAM_C, size=9, bold=True,
+               anchor=anchor).pack(fill="x", pady=(0, 4))
+        rows = []
+        for _ in range(_TOP_N):
+            r = tk.Frame(col, bg=PANEL)
+            r.pack(fill="x")
+            name, val = tk.StringVar(), tk.StringVar()
+            _label(r, textvariable=name, size=9, anchor=anchor).pack(side=side, fill="x", expand=True)
+            _label(r, textvariable=val, fg=DIM, size=9).pack(side=side_end)
+            rows.append((name, val))
+        top_rows[key] = rows
 
-    # Time window combobox — themed via ttk style
-    style = ttk.Style()
-    try:
-        style.theme_use("clam")
-    except tk.TclError:
-        pass
-    style.configure("Live.TCombobox",
-                    fieldbackground=PANEL2, background=PANEL2,
-                    foreground=FG, arrowcolor=DIM,
-                    bordercolor=GRID, lightcolor=GRID, darkcolor=GRID,
-                    selectbackground=PANEL2, selectforeground=FG)
+    # ---- timeline
+    tl = _section(tr("ציר זמן", "Timeline"))
+    range_min = tk.IntVar(value=60)
+    pills: dict[int, tk.Label] = {}
 
-    win_combo = ttk.Combobox(top, textvariable=window_label,
-                              values=[lbl for lbl, _ in WINDOW_OPTIONS],
-                              state="readonly", width=20, font=("Segoe UI", 9),
-                              style="Live.TCombobox")
-    win_combo.pack(side="left")
-    win_combo.bind("<<ComboboxSelected>>", lambda _e: redraw())
+    def _select_range(mins: int) -> None:
+        range_min.set(mins)
+        for m, lbl in pills.items():
+            lbl.configure(bg=PANEL2 if m == mins else BG, fg=FG if m == mins else MUTED)
+        state["key"] = None
+        refresh_timeline()
 
-    # Subtle divider before checkboxes
-    tk.Frame(top, bg=GRID, width=1, height=18).pack(side="left", padx=10)
+    pill_box = tk.Frame(tl.head, bg=BG)
+    pill_box.pack(side=side_end)
+    for text, mins in RANGE_OPTIONS:
+        lbl = _label(pill_box, text, fg=MUTED, size=9, padx=8, pady=1, cursor="hand2")
+        lbl.pack(side="left", padx=1)
+        lbl.bind("<Button-1>", lambda _e, m=mins: _select_range(m))
+        pills[mins] = lbl
+    legend = tk.Frame(tl.head, bg=BG)
+    legend.pack(side=side, padx=12)
+    for text, color in (("CPU", CPU_C), ("RAM", RAM_C), (tr("אירוע עומס", "load event"), RED)):
+        _label(legend, "●", fg=color, size=9).pack(side=side)
+        _label(legend, text, fg=MUTED, size=8).pack(side=side, padx=(0, 8))
+    timeline = _Timeline(tl)
+    timeline.c.pack(fill="x", pady=(6, 0))
 
-    _check(top, tr("ארכיון", "Archive"), include_archive).pack(side="left")
-    _check(top, "Disk", show_disk).pack(side="left", padx=(6, 0))
-    _check(top, "Swap", show_swap).pack(side="left", padx=(6, 0))
-    _check(top, "VRAM", show_vram).pack(side="left", padx=(6, 0))
-    _check(top, "Temp", show_temp).pack(side="left", padx=(6, 0))
+    # ---- today's events
+    ev_sec = _section(tr("אירועי עומס היום", "Load events today"))
+    all_link = _label(ev_sec.head, tr("כל הפרטים ←", "All details →"), fg=CPU_C, size=9,
+                      cursor="hand2")
+    all_link.pack(side=side_end)
+    ev_list = tk.Frame(ev_sec, bg=BG)
+    ev_list.pack(fill="x", pady=(6, 0))
 
-    tk.Frame(top, bg=GRID, width=1, height=18).pack(side="left", padx=10)
+    # ---- footer
+    tk.Frame(win, bg=BG).pack(fill="both", expand=True)
+    tk.Frame(win, bg=GRID, height=1).pack(fill="x")
+    footer = tk.Frame(win, bg=PANEL, padx=18, pady=6)
+    footer.pack(fill="x")
+    self_var, updated_var = tk.StringVar(), tk.StringVar()
+    _label(footer, textvariable=self_var, fg=MUTED, size=8).pack(side=side)
+    _label(footer, textvariable=updated_var, fg=MUTED, size=8).pack(side=side_end)
 
-    pause_btn = tk.Checkbutton(top, text=tr("השהה רענון", "Pause refresh"), variable=paused,
-                               bg=PANEL, fg=DIM, selectcolor=PANEL2,
-                               activebackground=PANEL, activeforeground=FG,
-                               font=("Segoe UI", 9), bd=0, highlightthickness=0)
-    pause_btn.pack(side="left")
-
-    tk.Frame(top, bg=GRID, width=1, height=18).pack(side="left", padx=10)
-
-    # 🔔 Alerts button — opens the spike browser
-    def _open_alerts_panel() -> None:
-        from metric_history import DEFAULT_SPIKES_DIR
-        events = _read_today_spikes(DEFAULT_SPIKES_DIR)
-        _show_alerts_panel(win, events)
-
-    alerts_btn = tk.Button(top, text=tr("🔔 התראות אחרונות", "🔔 Recent alerts"),
-                           bg=PANEL, fg=FG,
-                           activebackground=PANEL2, activeforeground=FG,
-                           relief="flat", bd=0, font=("Segoe UI", 9, "bold"),
-                           padx=8, pady=2, cursor="hand2",
-                           command=_open_alerts_panel)
-    alerts_btn.pack(side="left")
-
-    status_var = tk.StringVar(value=tr("טוען…", "Loading…"))
-    tk.Label(top, textvariable=status_var, bg=PANEL, fg=MUTED,
-             font=("Segoe UI", 9)).pack(side="left", padx=(14, 0))
-
-    # Figure
-    fig = Figure(figsize=(11, 5.5), facecolor=BG)
-    ax1 = fig.add_subplot(111, facecolor=BG)
-    ax2 = ax1.twinx()
-    ax2.set_facecolor(BG)
-
-    canvas = FigureCanvasTkAgg(fig, master=win)
-    canvas.get_tk_widget().pack(fill="both", expand=True)
-
-    # Toolbar (zoom/pan/save/home)
-    toolbar_frame = tk.Frame(win, bg=PANEL)
-    toolbar_frame.pack(fill="x", side="bottom")
-    toolbar = NavigationToolbar2Tk(canvas, toolbar_frame, pack_toolbar=False)
-    toolbar.config(bg=PANEL)
-    for child in toolbar.winfo_children():
-        try:
-            child.config(bg=PANEL)
-        except tk.TclError:
-            pass
-    toolbar.update()
-    toolbar.pack(side="left")
-
-    def _style_axes() -> None:
-        # Vercel-style minimalism: hide all spines except a hairline bottom
-        for ax in (ax1, ax2):
-            ax.tick_params(colors=MUTED, labelsize=8, length=0, pad=8)
-            for side in ("top", "right", "left"):
-                ax.spines[side].set_visible(False)
-            ax.spines["bottom"].set_color(GRID)
-            ax.spines["bottom"].set_linewidth(0.5)
-
-        # Very subtle dotted horizontal reference lines (zinc-800)
-        ax1.grid(True, axis="y", color=GRID, alpha=0.6,
-                 linewidth=0.4, linestyle=(0, (1, 4)))  # dotted with wide gaps
-        ax1.grid(False, axis="x")
-        ax1.set_axisbelow(True)
-
-        # No y-axis label — y ticks already say "Percent" by being 0-100
-        ax1.set_ylabel("")
-        ax2.set_ylabel("")
-        ax1.set_ylim(0, 105)
-        ax1.set_yticks([0, 25, 50, 75, 100])
-
-        # Hide y-tick labels on the right axis (keep its data plotted, label-free)
-        ax2.set_yticklabels([])
-        ax1.title.set_color(FG)
-
-    def _selected_window_minutes() -> int | None:
-        for lbl, mins in WINDOW_OPTIONS:
-            if lbl == window_label.get():
-                return mins
-        return 15
-
-    # Static styling happens once; each refresh only moves data into the
-    # artists below (no ax.clear(), no re-styling, no new Line2D objects).
-    _style_axes()
-    ax1.xaxis_date()
-    ax1.set_title("system metrics", color=DIM, fontsize=10, fontweight="normal",
-                  pad=12, loc="left")
-    ax1.set_xlabel("")
-    fig.subplots_adjust(left=0.05, right=0.93, top=0.90, bottom=0.12)
-
-    def _line(ax, color, width, alpha=1.0, label=None, rounded=False):
-        style = {"solid_capstyle": "round", "solid_joinstyle": "round"} if rounded else {}
-        return ax.plot([], [], color=color, linewidth=width, alpha=alpha,
-                       label=label, **style)[0]
-
-    lines = {
-        "cpu": _line(ax1, CPU_C, 1.3, label="CPU", rounded=True),
-        "ram": _line(ax1, RAM_C, 1.3, label="RAM", rounded=True),
-        "disk": _line(ax1, DISK_C, 1.0, 0.7, "Disk"),
-        "swap": _line(ax1, SWAP_C, 1.0, 0.7, "Swap"),
-        "vram": _line(ax1, VRAM_C, 1.0, 0.75, "VRAM"),
-        "temps": _line(ax2, TEMP_C, 1.0, 0.85, "Temp"),
-    }
-    toggles = {"disk": show_disk, "swap": show_swap, "vram": show_vram, "temps": show_temp}
-    # Last-point markers and inline end-of-line labels for CPU and RAM.
-    dots = {k: ax1.plot([], [], "o", color=c, markersize=28 ** 0.5,
-                        markeredgewidth=0, zorder=5)[0]
-            for k, c in (("cpu", CPU_C), ("ram", RAM_C))}
-    end_labels = {k: ax1.annotate("", xy=(0, 0), xytext=(6, 0), textcoords="offset points",
-                                  color=c, fontsize=10, fontweight="bold", va="center",
-                                  visible=False)
-                  for k, c in (("cpu", CPU_C), ("ram", RAM_C))}
-    waiting_text = ax1.text(0.5, 0.5, "Waiting for samples...", ha="center", va="center",
-                            transform=ax1.transAxes, color=DIM, fontsize=12, visible=False)
-    state: dict = {"fill": None, "fmt": None, "key": None, "archive": None}
-
-    # Incremental reader: each refresh parses only rows appended since the last.
+    state: dict = {"key": None, "events": [], "events_sig": None}
     incremental = _IncrementalSeriesReader(history_dir / "metrics.csv")
+    disk_path = disk_root_path()
+    from metric_history import DEFAULT_SPIKES_DIR as spikes_dir
 
-    def redraw() -> None:
+    def _sampler():
+        try:
+            from process_monitor import get_default_sampler, peek_default_sampler
+            s = peek_default_sampler() or get_default_sampler()
+            s.notify_activity()   # sample faster while someone is looking
+            return s
+        except Exception:
+            log.exception("Process sampler unavailable")
+            return None
+
+    def _open_event(ev: dict) -> None:
+        try:
+            from alerts import AlertEvent, show_alert_window
+            s = _sampler()
+            show_alert_window(AlertEvent(
+                reason=ev["reason"], trigger="cpu",
+                cpu_before=ev["cpu_before"], cpu_after=ev["cpu_after"],
+                ram_before=ev["ram_before"], ram_after=ev["ram_after"],
+                top_cpu=s.top_by_cpu(5) if s else [], top_rss=s.top_by_rss(5) if s else [],
+            ), win)
+        except Exception:
+            log.exception("Failed to open alert window")
+
+    all_link.bind("<Button-1>", lambda _e: _show_alerts_panel(win, state["events"]))
+
+    def refresh_events() -> None:
+        target = spikes_dir / f"spikes-{datetime.now():%Y-%m-%d}.md"
+        try:
+            st = target.stat()
+            sig = (target.name, st.st_size, st.st_mtime)
+        except OSError:
+            sig = (target.name, None, None)
+        if sig == state["events_sig"]:
+            return
+        state["events_sig"] = sig
+        state["events"] = _read_today_spikes(spikes_dir)
+        for child in ev_list.winfo_children():
+            child.destroy()
+        if not state["events"]:
+            _label(ev_list, tr("לא היו אירועי עומס היום 👍", "No load events today 👍"),
+                   fg=DIM, size=10, anchor=anchor).pack(fill="x", pady=4)
+            return
+        for ev in list(reversed(state["events"]))[:5]:
+            row = tk.Frame(ev_list, bg=PANEL, padx=10, pady=6, cursor="hand2")
+            row.pack(fill="x", pady=2)
+            accent = _trigger_to_color(ev["reason"])
+            tk.Frame(row, bg=accent, width=3).pack(side=side, fill="y")
+            _label(row, ev["time"], fg=accent, size=10, bold=True).pack(side=side, padx=8)
+            suspects = ", ".join(name for name, _size in ev.get("suspects", [])[:2])
+            text = ev["reason"] + (tr(f"  ·  חשודים: {suspects}", f"  ·  suspects: {suspects}")
+                                   if suspects else "")
+            msg = _label(row, text, size=9, anchor=anchor)
+            msg.pack(side=side, fill="x", expand=True)
+            for wdg in (row, msg, *row.winfo_children()):
+                wdg.bind("<Button-1>", lambda _e, e=ev: _open_event(e))
+
+    def _event_marks() -> list[tuple[float, str]]:
+        today = datetime.now().date()
+        marks = []
+        for ev in state["events"]:
+            try:
+                hh, mm, ss = (int(p) for p in ev["time"].split(":"))
+            except ValueError:
+                continue
+            suspects = ", ".join(n for n, _s in ev.get("suspects", [])[:2])
+            label = ev["time"] + "  " + ev["reason"] + (f"  ({suspects})" if suspects else "")
+            marks.append((_wall_days(datetime(today.year, today.month, today.day, hh, mm, ss)),
+                          label))
+        return marks
+
+    def refresh_timeline() -> None:
         series = incremental.read()
-        arch_t = arch_cols = None
-        if include_archive.get():
-            if state["archive"] is None:
-                state["archive"] = _ArchiveSeries(history_dir, incremental)
-            arch_t, arch_cols = state["archive"].get()
-        window_min = _selected_window_minutes()
-
-        # Nothing new and no setting changed: skip the whole render.
-        key = (len(series), series.t[-1] if len(series) else None,
-               None if arch_t is None else len(arch_t), window_min,
-               tuple(v.get() for v in toggles.values()))
+        mins = range_min.get()
+        key = (len(series), series.t[-1] if len(series) else None, mins,
+               len(state["events"]), timeline.plot_width())
         if key == state["key"]:
             return
         state["key"] = key
-
-        if len(series):
-            newest = series.t[-1]
-        elif arch_t is not None and len(arch_t):
-            newest = float(arch_t[-1])
-        else:
-            newest = None
-        total = len(series) + (0 if arch_t is None else len(arch_t))
-
-        if newest is None or total < 2:
-            for artist in (*lines.values(), *dots.values()):
-                artist.set_data([], [])
-            for lbl in end_labels.values():
-                lbl.set_visible(False)
-            if state["fill"] is not None:
-                state["fill"].remove()
-                state["fill"] = None
-            waiting_text.set_visible(True)
-            status_var.set(tr("ממתין לדגימות…", "Waiting for samples…"))
-            canvas.draw_idle()
+        if len(series) < 2:
+            timeline.clear()
             return
-        waiting_text.set_visible(False)
+        newest = series.t[-1]
+        start = newest - mins / 1440.0
+        t, cols = series.view(bisect_left(series.t, start))
+        t, cols, _n = _window(t, cols, start, max_points=timeline.plot_width())
+        timeline.plot(t, cols, start, newest + max(2, mins * 60 * 0.01) / 86400.0,
+                      _event_marks())
 
-        start = None if window_min is None else newest - window_min / 1440.0
-        lo = 0 if start is None else bisect_left(series.t, start)
-        t, cols = series.view(lo)
-        if arch_t is not None and len(arch_t):
-            a_lo = 0 if start is None else int(np.searchsorted(arch_t, start))
-            t = np.concatenate([arch_t[a_lo:], t])
-            cols = {k: np.concatenate([arch_cols[k][a_lo:], cols[k]]) for k in cols}
-        latest = {k: float(v[-1]) for k, v in cols.items()}
-        t, cols, raw_n = _window(t, cols, start)   # fresh arrays; views released
+    def refresh_now() -> None:
+        snap = collect_snapshot(disk_path)
+        gpu_t = read_gpu_temp_celsius()
+        s = _sampler()
+        groups = _group_by_name(s.snapshot()) if s else []
+        by_cpu = sorted((g for g in groups if g[1] >= 0.1),
+                        key=lambda g: g[1], reverse=True)[:_TOP_N]
+        by_ram = sorted(groups, key=lambda g: g[2], reverse=True)[:_TOP_N]
 
-        for k, line in lines.items():
-            v = cols[k]
-            shown = (k not in toggles or toggles[k].get()) and not np.isnan(v).all()
-            line.set_visible(shown)
-            line.set_data(t, v) if shown else line.set_data([], [])
+        color, headline, issues = _verdict(snap.cpu_percent, snap.ram_percent, snap.temp_celsius)
+        culprit = (by_cpu[0][0] if "cpu" in issues and by_cpu
+                   else by_ram[0][0] if "ram" in issues and by_ram else None)
+        if culprit:
+            headline += tr(f" — בעיקר {culprit}", f" — mostly {culprit}")
+        verdict_var.set(headline)
+        dot.itemconfigure(dot_item, fill=color)
 
-        # Subtle area fill under CPU only — gives a sense of "load", very faint
-        if state["fill"] is not None:
-            state["fill"].remove()
-        state["fill"] = ax1.fill_between(t, cols["cpu"], 0, color=CPU_C, alpha=0.06,
-                                         linewidth=0)
+        cards["cpu"][0].set(f"{snap.cpu_percent:.0f}%")
+        cards["cpu"][1].set(tr(f"{snap.cpu_logical} ליבות", f"{snap.cpu_logical} cores"))
+        cards["ram"][0].set(f"{snap.ram_percent:.0f}%")
+        cards["ram"][1].set(f"{_fmt_bytes(snap.ram_used)} / {_fmt_bytes(snap.ram_total)}")
+        cards["disk"][0].set("—" if snap.disk_percent is None else f"{snap.disk_percent:.0f}%")
+        cards["disk"][1].set(snap.disk_path if snap.disk_total is None
+                             else f"{snap.disk_path}  {_fmt_bytes(snap.disk_total - (snap.disk_used or 0))} "
+                                  + tr("פנוי", "free"))
+        cards["temp"][0].set("—" if snap.temp_celsius is None else f"{snap.temp_celsius:.0f}°C")
+        cards["temp"][1].set(f"GPU {gpu_t:.0f}°C" if gpu_t is not None
+                             else "" if snap.temp_celsius is not None
+                             else tr("אין חיישן זמין", "no sensor available"))
 
-        t_last = float(t[-1])
-        for k in ("cpu", "ram"):
-            dots[k].set_data([t_last], [latest[k]])
-            end_labels[k].xy = (t_last, latest[k])
-            end_labels[k].set_text(f"  {latest[k]:.0f}%")
-            end_labels[k].set_visible(True)
+        for key, rows, fmt in (("cpu", by_cpu, lambda g: f"{g[1]:.1f}%"),
+                               ("ram", by_ram, lambda g: _fmt_bytes(g[2]))):
+            for i, (name_var, val_var) in enumerate(top_rows[key]):
+                if i < len(rows):
+                    g = rows[i]
+                    name_var.set(g[0] + (f"  ×{g[3]}" if g[3] > 1 else ""))
+                    val_var.set(fmt(g))
+                else:
+                    name_var.set("")
+                    val_var.set("")
+        pct, rss = self_usage()
+        self_var.set("PulseDeck: " + format_self_usage(pct, rss))
+        updated_var.set(tr(f"עודכן {datetime.now():%H:%M:%S}", f"Updated {datetime.now():%H:%M:%S}"))
 
-        # Force x-limits to the window bounds (so chart "scrolls" as time advances)
-        if window_min is not None:
-            xmin = newest - window_min / 1440.0
-            xmax = t_last + max(2, window_min * 60 * 0.02) / 86400.0
-        else:
-            xmin = float(t[0])
-            xmax = t_last + 2 / 86400.0
-        ax1.set_xlim(xmin, xmax)
-        ax2.relim(visible_only=True)
-        ax2.autoscale_view(scalex=False)
-
-        # Pick a sensible time format based on window length
-        if window_min is None or window_min >= 1440:
-            fmt = "%m-%d %H:%M"
-        elif window_min >= 60:
-            fmt = "%H:%M"
-        else:
-            fmt = "%H:%M:%S"
-        if fmt != state["fmt"]:
-            ax1.xaxis.set_major_formatter(mdates.DateFormatter(fmt))
-            # Tilted labels: ticks created later copy this from the first one.
-            fig.autofmt_xdate(bottom=0.12)
-            state["fmt"] = fmt
-        canvas.draw_idle()
-
-        disk_now, temp_now = latest["disk"], latest["temps"]
-        now_txt = (f"CPU {latest['cpu']:.0f}%  RAM {latest['ram']:.0f}%"
-                   + (f"  Disk {disk_now:.0f}%" if disk_now == disk_now else "")
-                   + (f"  Temp {temp_now:.0f}°C" if temp_now == temp_now else ""))
-        status_var.set(tr(
-            f"רענון אחרון: {datetime.now().strftime('%H:%M:%S')}  ·  "
-            f"{raw_n}/{total} נקודות בחלון  ·  עכשיו: {now_txt}",
-            f"Last refresh: {datetime.now().strftime('%H:%M:%S')}  ·  "
-            f"{raw_n}/{total} points in window  ·  now: {now_txt}",
-        ))
+    def refresh() -> None:
+        for step in (refresh_now, refresh_events, refresh_timeline):
+            try:
+                step()
+            except Exception:
+                log.exception("Window refresh step %s failed", step.__name__)
 
     def tick() -> None:
         if not win.winfo_exists():
             return
-        # Minimised or paused: nobody is looking, so don't render. The next
-        # visible tick catches up in one go (only new rows are parsed).
-        if not paused.get() and win.state() not in ("iconic", "withdrawn"):
-            try:
-                redraw()
-            except Exception:
-                log.exception("Live chart redraw failed")
+        # Minimised: nobody is looking, so don't do the work.
+        if win.state() not in ("iconic", "withdrawn"):
+            refresh()
         win.after(refresh_ms, tick)
 
-    redraw()
+    _select_range(60)
+    win.update_idletasks()
+    refresh()
     win.after(refresh_ms, tick)
 
     if parent is None:
@@ -834,5 +938,4 @@ def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
             win.mainloop()
         except tk.TclError:
             pass
-
     return win

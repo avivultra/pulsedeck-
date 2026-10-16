@@ -128,7 +128,7 @@ def build_tray_icon(
         icon.stop()
 
     menu = Menu(
-        MenuItem(tr("פתח גרף חי", "Open live chart"), on_open_chart, default=True),
+        MenuItem(tr("📊 מה קורה במחשב", "📊 What's happening"), on_open_chart, default=True),
         MenuItem(tr("🔔 זיהוי עומס / התראות", "🔔 Load detection / alerts"), on_open_alerts),
         MenuItem(tr("תיקיית היסטוריה", "History folder"), on_open_folder),
         Menu.SEPARATOR,

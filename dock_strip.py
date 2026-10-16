@@ -390,7 +390,14 @@ def run_dock_main(args: object) -> None:
 
     def menu_popup(event: tk.Event) -> None:
         m = tk.Menu(root, tearoff=0)
-        m.add_command(label=tr("פתח גרף חי", "Open live chart"),
+        try:
+            from self_usage import format_self_usage, self_usage
+            m.add_command(label="PulseDeck: " + format_self_usage(*self_usage()),
+                          state="disabled")
+            m.add_separator()
+        except Exception:
+            log.debug("self usage unavailable", exc_info=True)
+        m.add_command(label=tr("📊 מה קורה במחשב", "📊 What's happening"),
                       command=_open_live_chart)
         m.add_command(label=tr("🔔 זיהוי עומס / התראות", "🔔 Load events / alerts"),
                       command=_open_alerts_panel)

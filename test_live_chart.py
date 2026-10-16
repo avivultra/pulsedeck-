@@ -7,9 +7,9 @@ import unittest
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import live_chart
 from live_chart import (
     MAX_PLOT_POINTS,
-    _ArchiveSeries,
     _IncrementalSeriesReader,
     _wall_days,
     _window,
@@ -114,22 +114,78 @@ class WindowTest(unittest.TestCase):
         self.assertNotEqual(cols["cpu"][0], -1)
 
 
-class ArchiveSeriesTest(unittest.TestCase):
-    def test_archive_and_older_main_rows_become_minutes_before_live(self):
-        from metric_history import ARCHIVE_PREFIX, ARCHIVE_SUFFIX
+class SpikeSuspectsTest(unittest.TestCase):
+    def test_suspects_are_parsed_per_event(self):
         d = Path(tempfile.mkdtemp())
-        (d / f"{ARCHIVE_PREFIX}2026-W39{ARCHIVE_SUFFIX}").write_text(
-            HEADER + "".join(_row(i - 7200) for i in range(600)), encoding="utf-8")
-        (d / "metrics.csv").write_text(HEADER + "".join(_row(i) for i in range(5000)),
-                                       encoding="utf-8")
-        live = _IncrementalSeriesReader(d / "metrics.csv", keep_days=100 / 86400)
-        s = live.read()
-        arch = _ArchiveSeries(d, live)
-        t, cols = arch.get()
-        self.assertTrue(len(t))
-        self.assertTrue((t[1:] >= t[:-1]).all())            # sorted
-        self.assertLess(t[-1], s.t[0])                       # strictly older than live
-        self.assertLessEqual(len(t), (600 + 5000) // 60 + 4)  # per-minute
+        (d / f"spikes-{datetime.now():%Y-%m-%d}.md").write_text(
+            "# Spike report\n\n## ⚠ 10:00:01 — CPU jumped\n\n"
+            "- **CPU:** 10.0% → 90.0%\n- **RAM:** 50.0% → 51.0%\n\n"
+            "1. `chrome.exe` — 1900 MiB\n2. `Code.exe` — 1100 MiB\n\n---\n\n"
+            "## ⚠ 11:00:00 — RAM 91%\n\n- **RAM:** 80.0% → 91.0%\n",
+            encoding="utf-8")
+        events = live_chart._read_today_spikes(d)
+        self.assertEqual(len(events), 2)
+        self.assertEqual(events[0]["suspects"],
+                         [("chrome.exe", "1900 MiB"), ("Code.exe", "1100 MiB")])
+        self.assertEqual(events[0]["cpu_after"], 90.0)
+        self.assertEqual(events[1]["suspects"], [])
+
+
+class VerdictTest(unittest.TestCase):
+    def test_calm(self):
+        color, text, issues = live_chart._verdict(10, 40, 50)
+        self.assertEqual(color, live_chart.GREEN)
+        self.assertEqual(issues, [])
+
+    def test_busy_cpu_is_amber_and_names_the_resource(self):
+        color, _text, issues = live_chart._verdict(70, 40, None)
+        self.assertEqual(color, live_chart.AMBER)
+        self.assertEqual(issues, ["cpu"])
+
+    def test_full_memory_is_red(self):
+        color, _text, issues = live_chart._verdict(10, 95, None)
+        self.assertEqual(color, live_chart.RED)
+        self.assertEqual(issues, ["ram"])
+
+    def test_heat_alone_is_red(self):
+        color, _text, _issues = live_chart._verdict(10, 40, 90)
+        self.assertEqual(color, live_chart.RED)
+
+
+class GroupByNameTest(unittest.TestCase):
+    def test_same_name_processes_fold_and_idle_is_ignored(self):
+        from types import SimpleNamespace as P
+        procs = [P(name="chrome.exe", cpu_percent=2.0, rss_bytes=100),
+                 P(name="Chrome.exe", cpu_percent=3.0, rss_bytes=200),
+                 P(name="System Idle Process", cpu_percent=90.0, rss_bytes=0),
+                 P(name="code.exe", cpu_percent=1.0, rss_bytes=50)]
+        groups = {g[0].lower(): g for g in live_chart._group_by_name(procs)}
+        self.assertEqual(set(groups), {"chrome.exe", "code.exe"})
+        _name, cpu, rss, count = groups["chrome.exe"]
+        self.assertEqual((cpu, rss, count), (5.0, 300, 2))
+
+
+class TimeTicksTest(unittest.TestCase):
+    def test_ticks_are_round_and_few(self):
+        start = _wall_days(datetime(2026, 10, 1, 9, 7, 13))
+        for minutes in (5, 15, 60, 360, 1440):
+            ticks = live_chart._time_ticks(start, start + minutes / 1440)
+            self.assertTrue(1 <= len(ticks) <= 7, (minutes, len(ticks)))
+            for tv in ticks:
+                secs = round(tv * 86400)
+                self.assertEqual(secs % 60, 0)
+
+
+class SelfUsageTest(unittest.TestCase):
+    def test_reports_plausible_numbers(self):
+        from self_usage import format_self_usage, self_usage
+        pct, rss = self_usage()
+        sum(i * i for i in range(200_000))      # burn a little CPU
+        pct, rss = self_usage()
+        self.assertGreaterEqual(pct, 0.0)
+        self.assertLessEqual(pct, 100.0)
+        self.assertGreater(rss, 1024 * 1024)
+        self.assertIn("MB", format_self_usage(pct, rss))
 
 
 if __name__ == "__main__":

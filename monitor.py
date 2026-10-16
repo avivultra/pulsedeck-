@@ -312,7 +312,7 @@ class HistoryLogger:
             vram_percent=vram_pct,
         )
         self.rows_logged += 1
-        # Static PNG rendering removed — use the live chart (right-click dock → "פתח גרף חי").
+        # Static PNG rendering removed — use the "What's happening" window (right-click dock).
         # If you still want a one-off PNG, run `python plot_history.py` manually.
 
     def render_final(self) -> None:
