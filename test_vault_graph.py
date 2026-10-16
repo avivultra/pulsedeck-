@@ -231,5 +231,50 @@ class UsesTheRoomTest(unittest.TestCase):
                 self.assertGreaterEqual(math.hypot(a.x - b.x, a.y - b.y), pad_of(a) + pad_of(b), (a.key, b.key))
 
 
+class EventLineTest(unittest.TestCase):
+    """Windows lays Tk text out left to right: the spike log's "CPU עלה ב־..."
+    came out scrambled in the events list, worse when the long line wrapped."""
+
+    EV = {"time": "01:57:32", "res": "cpu",
+          "reason": "CPU עלה ב־+40.0% (מ־42.0% ל־82.0%)",
+          "raw": {"cpu_before": 42.0, "cpu_after": 82.0, "ram_before": 61.0, "ram_after": 62.0}}
+
+    def tearDown(self):
+        import i18n
+        i18n.set_language("he")
+
+    def test_hebrew_line_is_short_embedded_and_has_no_latin_word(self):
+        import i18n
+        import vault_window
+        i18n.set_language("he")
+        line = vault_window._event_line(self.EV)
+        self.assertEqual(line, i18n.RLE + "01:57:32 · מעבד 82%" + i18n.PDF)
+        ram = dict(self.EV, res="ram", reason="RAM גבוה: 91.0%", raw={"ram_after": 91.0})
+        self.assertEqual(vault_window._event_line(ram), i18n.RLE + "01:57:32 · זיכרון 91%" + i18n.PDF)
+
+    def test_without_numbers_the_reason_is_shown_in_hebrew(self):
+        import i18n
+        import vault_window
+        i18n.set_language("he")
+        line = vault_window._event_line({"time": "09:00:00", "reason": "CPU גבוה במיוחד", "raw": {}})
+        self.assertIn("מעבד גבוה במיוחד", line)
+        self.assertNotIn("CPU", line)
+
+    def test_english_is_plain(self):
+        import i18n
+        import vault_window
+        i18n.set_language("en")
+        self.assertEqual(vault_window._event_line(self.EV), "01:57:32 · CPU 82%")
+        self.assertEqual(vault_window._event_reason("CPU rose +40.0% (from 42.0% to 82.0%)"), ["CPU rose +40.0%"])
+
+    def test_reasons_are_split_into_short_lines(self):
+        # A long reason wrapped in the event page's red box and came out in the wrong order.
+        import i18n
+        import vault_window
+        i18n.set_language("he")
+        self.assertEqual(vault_window._event_reason("CPU עלה ב־+19.9% (מ־40.5% ל־60.4%) · CPU גבוה במיוחד: 92.0%"),
+                         ["מעבד עלה ב־+19.9%", "מעבד גבוה במיוחד: 92.0%"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 import tkinter as tk
 from datetime import datetime, timedelta
@@ -112,6 +113,32 @@ def _fmt_rate(bps: float) -> str:
         if bps >= div:
             return f"{bps / div:.1f} {unit}"
     return f"{bps:.0f} B/s"
+
+
+def _event_reason(reason: str) -> list[str]:
+    """A load event's reasons, one short line each, in the window's language.
+    The spike log writes "CPU"/"RAM" inside Hebrew sentences; a Latin word in
+    a Hebrew line is what Windows lays out in the wrong order, so Hebrew says
+    מעבד/זיכרון. The "(from x% to y%)" part is dropped: it made the line wrap,
+    and the event page shows before → after right under it."""
+    if i18n.is_rtl():
+        reason = reason.replace("CPU", "מעבד").replace("RAM", "זיכרון")
+    return [p for p in (re.sub(r"\s*\([^)]*\)", "", part).strip() for part in reason.split(" · ")) if p]
+
+
+def _event_line(d: dict) -> str:
+    """One short line per load event ("01:57:32 · מעבד 82%"), short enough
+    not to wrap: a wrapped mixed line is laid out line by line and scrambles.
+    The full reason is on the event's own page."""
+    raw = d.get("raw") or {}
+    ram = d.get("res") == "ram"
+    level = raw.get("ram_after" if ram else "cpu_after") or 0
+    if level:
+        what = (tr(f"זיכרון {level:.0f}%", f"Memory {level:.0f}%") if ram
+                else tr(f"מעבד {level:.0f}%", f"CPU {level:.0f}%"))
+    else:
+        what = (_event_reason(d.get("reason", "")) or [""])[0]
+    return i18n.bidi(f"{d.get('time', '')} · {what}")
 
 
 def open_vault(history_dir: Path, parent: tk.Misc | None = None) -> tk.Toplevel | tk.Tk | None:
@@ -779,7 +806,7 @@ class VaultWindow:
             text = f"{n.label}  {n.data['text']}" + (f"\n{n.data['sub']}" if n.data.get("sub") else "")
         elif n.kind == "event":
             sus = ", ".join(n.data.get("suspects", [])[:2])
-            text = f"{n.data['time']}  {n.data['reason']}" + (tr(f"\nחשוד: {sus}", f"\nSuspect: {sus}") if sus else "")
+            text = _event_line(n.data) + ("\n" + i18n.bidi(tr(f"חשוד: {sus}", f"Suspect: {sus}")) if sus else "")
         elif n.kind == "ghost":
             text = f"{n.label}\n" + tr(f"לא פעיל {n.data['idle']} · {_fmt_bytes(n.data['rss'])}",
                                        f"Idle {n.data['idle']} · {_fmt_bytes(n.data['rss'])}")
@@ -918,7 +945,7 @@ class VaultWindow:
         if evs:
             t.insert("end", "▾ 📂 " + tr("אירועים", "Events") + "\n", "folder")
             for n in evs:
-                file(n.key, f"{n.data['time']} {n.data['reason']}")
+                file(n.key, _event_line(n.data))
         ghosts = [n for n in nodes.values() if n.kind == "ghost"]
         if ghosts:
             t.insert("end", "▾ 📂 " + tr("נטושים", "Abandoned") + "\n", "folder")
@@ -1067,7 +1094,7 @@ class VaultWindow:
         if evs:
             for n in evs:
                 self._w("• ", "p")
-                self._link(f"{n.data['time']} {n.data['reason']}", n.key)
+                self._link(_event_line(n.data), n.key)
                 self._w("\n", "p")
         else:
             self._w(tr("לא היו אירועי עומס היום.\n", "No load events today.\n"), "p")
@@ -1134,10 +1161,13 @@ class VaultWindow:
 
     def _note_event(self, n):
         d = n.data
-        self._w(f"{d['time']} · {d['reason']}\n", "h1")
+        self._w(_event_line(d) + "\n", "h1")
         self._w(tr("אירוע עומס · היום", "Load event · today") + "\n", "sub")
         raw = d.get("raw", {})
-        self._callout("warn", "⚠ " + d["reason"],
+        # The icon stays outside the embedding: Windows draws it in a fallback
+        # font, as a separate piece, and an embedding split across two pieces
+        # is lost - like every other callout, it sits at the left edge.
+        self._callout("warn", "⚠ " + "\n".join(i18n.bidi(p) for p in _event_reason(d["reason"])),
                       f"CPU {raw.get('cpu_before', 0):.0f}% → {raw.get('cpu_after', 0):.0f}%   ·   "
                       f"RAM {raw.get('ram_before', 0):.0f}% → {raw.get('ram_after', 0):.0f}%")
         sus = d.get("suspects", [])

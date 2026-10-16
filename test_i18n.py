@@ -50,6 +50,15 @@ class I18nTest(unittest.TestCase):
             i18n.set_language(None)
             self.assertEqual(i18n.language(), "en")
 
+    def test_bidi_embeds_hebrew_lines_only(self) -> None:
+        # Windows draws Tk text left to right; the embedding makes a mixed
+        # Hebrew line read right to left. English is left exactly as it was.
+        i18n.set_language("he")
+        self.assertEqual(i18n.bidi("01:57 · מעבד 82%"), "‫01:57 · מעבד 82%‬")
+        self.assertEqual(i18n.bidi(""), "")
+        i18n.set_language("en")
+        self.assertEqual(i18n.bidi("01:57 · CPU 82%"), "01:57 · CPU 82%")
+
     def test_set_language_rejects_unsupported(self) -> None:
         with mock.patch.object(i18n, "_resolve", return_value="en"):
             i18n.set_language("fr")

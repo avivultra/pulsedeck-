@@ -83,6 +83,21 @@ def tr(he: str, en: str) -> str:
     return he if is_rtl() else en
 
 
+RLE, PDF = "‫", "‬"     # right-to-left embedding ... pop
+
+
+def bidi(text: str) -> str:
+    """Lay one line out right-to-left in Hebrew.
+
+    Windows draws every Tk string as if it were English, left to right: a
+    Hebrew line that starts with a time or holds a Latin word ("CPU") comes
+    out with its parts in the wrong order. An embedding around the line fixes
+    the order (Windows honours it; a lone RLM mark is ignored). It covers the
+    first visual line only, so keep such lines short enough not to wrap.
+    """
+    return RLE + text + PDF if text and is_rtl() else text
+
+
 # ---- layout helpers (Tk option values) ----
 
 def ANCHOR() -> str:
