@@ -37,6 +37,22 @@ class ProtocolTest(unittest.TestCase):
         self.assertIn("Nothing is listening on port 1", replies[2]["result"]["content"][0]["text"])
         self.assertIn("error", replies[3])
 
+    def test_non_ascii_paths_survive_the_pipe_whatever_the_code_page(self):
+        # Windows pipes default to the ANSI code page (cp1255 on a Hebrew
+        # system); an MCP client sends and expects UTF-8.
+        import os
+        folder = tempfile.mkdtemp(prefix="גרף ביצועים ")
+        env = {k: v for k, v in os.environ.items() if k not in ("PYTHONIOENCODING", "PYTHONUTF8")}
+        msg = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+               "params": {"name": "pulsedeck_leftovers", "arguments": {"folder": folder}}}
+        out = subprocess.run([sys.executable, str(HERE / "pulsedeck_mcp.py")],
+                             input=(json.dumps(msg, ensure_ascii=False) + "\n").encode("utf-8"),
+                             capture_output=True, timeout=60, cwd=HERE, env=env)
+        reply = json.loads(out.stdout.decode("utf-8"))
+        text = reply["result"]["content"][0]["text"]
+        self.assertFalse(reply["result"]["isError"], text)
+        self.assertIn(folder, text)
+
     def test_tool_errors_come_back_as_text(self):
         r = pulsedeck_mcp.handle({"jsonrpc": "2.0", "id": 9, "method": "tools/call",
                                   "params": {"name": "pulsedeck_leftovers",

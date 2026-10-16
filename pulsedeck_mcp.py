@@ -328,7 +328,19 @@ def handle(msg: dict) -> dict | None:
     return {"jsonrpc": "2.0", "id": mid, "error": {"code": -32601, "message": f"Unknown method {method}"}}
 
 
+def _utf8_stdio() -> None:
+    """MCP (and anything reading our output) speaks UTF-8; Windows pipes default
+    to the ANSI code page (cp1255 on a Hebrew system), which garbles any
+    non-ASCII path in both directions."""
+    for stream in (sys.stdin, sys.stdout):
+        try:
+            stream.reconfigure(encoding="utf-8", newline="\n")
+        except (AttributeError, ValueError):
+            pass
+
+
 def main() -> None:
+    _utf8_stdio()
     for line in sys.stdin:
         line = line.strip()
         if not line:
