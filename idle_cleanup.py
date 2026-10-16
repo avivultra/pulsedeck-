@@ -23,6 +23,7 @@ No tkinter here, so it stays testable without a display.
 from __future__ import annotations
 
 import logging
+import ntpath
 import os
 import time
 from dataclasses import dataclass, field
@@ -157,7 +158,8 @@ def _established_pids() -> set[int]:
 
 
 def _windows_dir() -> str:
-    return os.path.normcase(os.environ.get("SystemRoot", r"C:\Windows")).rstrip("\\/") + os.sep
+    # ntpath, not os.path: these are Windows paths even when tests run on Linux.
+    return ntpath.normcase(os.environ.get("SystemRoot", r"C:\Windows")).rstrip("\\") + "\\"
 
 
 def _idle_for(info) -> float:
@@ -264,7 +266,7 @@ def idle_hog_targets(sampler, *, exclude_pids: set[int] | None = None,
                 continue
             if not _is_current_user(proc.username()):
                 continue
-            exe = os.path.normcase(proc.exe() or "")
+            exe = ntpath.normcase(proc.exe() or "")
             if not exe or exe.startswith(win_dir):
                 continue
             member_pids = tuple(m.pid for m in family)
