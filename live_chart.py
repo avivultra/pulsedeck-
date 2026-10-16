@@ -7,6 +7,8 @@ import csv
 import logging
 import re
 import tkinter as tk
+from array import array
+from bisect import bisect_left
 from datetime import datetime
 from pathlib import Path
 from tkinter import messagebox, ttk
@@ -197,128 +199,308 @@ TEMP_C = "#ef4444"   # red-500
 VRAM_C = "#eab308"   # yellow-500
 
 
-def _read_rows(history_dir: Path, include_archive: bool, max_rows: int = 50_000) -> list[dict]:
-    """Read CSV rows, sorted by unix_time, optionally merging archives.
+# ---------- History data: parsed once, kept as float arrays ----------
+#
+# The chart refreshes every couple of seconds while history grows by one row
+# per second. Everything below is shaped so a refresh costs the same whether
+# the file holds five minutes or a week: only the appended tail is ever parsed,
+# windows are found by binary search, and what reaches matplotlib is capped at
+# MAX_PLOT_POINTS (an 1100-px-wide chart cannot show more anyway).
 
-    NOTE: full read — used as a fallback. For the hot path inside an open
-    live-chart window, see `_IncrementalCsvReader` which only reads the
-    appended tail since the last refresh.
+# Metric key -> CSV column. cpu/ram are required for a row to count.
+_METRIC_COLUMNS = {
+    "cpu": "cpu_percent",
+    "ram": "ram_percent",
+    "disk": "disk_percent",
+    "swap": "swap_percent",
+    "temps": "temp_celsius",
+    "vram": "vram_percent",
+}
+_OPTIONAL = ("disk", "swap", "temps", "vram")
+
+# Points handed to matplotlib per line. Longer windows are reduced by taking
+# the max of each bucket, so a one-second spike in a 24-hour view still shows.
+MAX_PLOT_POINTS = 1500
+# How much of metrics.csv the open chart keeps at full resolution (about
+# 10 MB for two days). Older data is shown, per minute, via the archive toggle.
+LIVE_KEEP_DAYS = 2.0
+ARCHIVE_BUCKET_DAYS = 60.0 / 86400.0
+# Generous bytes-per-row, used to skip straight to the tail of a big file.
+_ROW_BYTES_ESTIMATE = 120
+
+_EPOCH = datetime(1970, 1, 1)   # matplotlib's default date epoch (>= 3.3)
+
+
+def _wall_days(dt: datetime) -> float:
+    """Naive local datetime -> matplotlib date number.
+
+    Same value mdates.date2num gives for a naive datetime, without its
+    per-call overhead; axis labels show the local time the row was written.
     """
-    try:
-        from metric_history import iter_history_rows
-        rows = iter_history_rows(history_dir, include_archive=include_archive)
-    except Exception:
-        log.exception("Failed to read history rows")
-        return []
-    return rows[-max_rows:] if len(rows) > max_rows else rows
+    return (dt - _EPOCH).total_seconds() / 86400.0
 
 
-class _IncrementalCsvReader:
-    """Reads only the new tail of metrics.csv since the previous call.
+class _Series:
+    """Parallel float arrays: `t` (matplotlib date numbers) + one per metric.
 
-    First call: reads the entire file. Subsequent calls: seek to the byte
-    offset where the previous read stopped and parse just the appended rows.
-    If the file shrinks (e.g. rotation moved old rows to an archive) the
-    cache is invalidated and we re-read from scratch.
-
-    The chart's max_rows window protects memory — once cached_rows exceeds
-    it, we keep only the tail.
+    Missing optional values are NaN. array('d') keeps appends cheap and lets
+    numpy view the data without copying.
     """
 
-    def __init__(self, csv_path: Path, max_rows: int = 50_000) -> None:
+    __slots__ = ("t", "cols")
+
+    def __init__(self) -> None:
+        self.t = array("d")
+        self.cols = {k: array("d") for k in _METRIC_COLUMNS}
+
+    def __len__(self) -> int:
+        return len(self.t)
+
+    def extend_from_rows(self, rows, header: list[str]) -> None:
+        """Parse csv.reader rows (lists of str) and append the valid ones."""
+        try:
+            ts_i = header.index("timestamp_iso")
+            cpu_i = header.index(_METRIC_COLUMNS["cpu"])
+            ram_i = header.index(_METRIC_COLUMNS["ram"])
+        except ValueError:
+            return
+        nan = float("nan")
+        t_app = self.t.append
+        cpu_app = self.cols["cpu"].append
+        ram_app = self.cols["ram"].append
+        optional = [(self.cols[k].append,
+                     header.index(_METRIC_COLUMNS[k]) if _METRIC_COLUMNS[k] in header else None)
+                    for k in _OPTIONAL]
+        for r in rows:
+            try:
+                t = _wall_days(datetime.fromisoformat(r[ts_i].strip()))
+                c = float(r[cpu_i])
+                m = float(r[ram_i])
+            except (ValueError, TypeError, IndexError):
+                continue
+            t_app(t)
+            cpu_app(c)
+            ram_app(m)
+            for app, i in optional:
+                raw = r[i] if i is not None and i < len(r) else ""
+                if raw:
+                    try:
+                        app(float(raw))
+                        continue
+                    except ValueError:
+                        pass
+                app(nan)
+
+    def drop_before(self, cutoff: float) -> "_Series":
+        """Remove points older than `cutoff`; return them as a new _Series."""
+        n = bisect_left(self.t, cutoff)
+        old = _Series()
+        if n:
+            old.t = self.t[:n]
+            del self.t[:n]
+            for k, a in self.cols.items():
+                old.cols[k] = a[:n]
+                del a[:n]
+        return old
+
+    def view(self, lo: int = 0):
+        """numpy views from index `lo` on. Drop them before the next append:
+        array('d') cannot grow while a view of it is alive."""
+        import numpy as np
+
+        def _v(a):
+            return np.frombuffer(memoryview(a)[lo:], dtype=float) if len(a) > lo else np.empty(0)
+        return _v(self.t), {k: _v(a) for k, a in self.cols.items()}
+
+
+class _IncrementalSeriesReader:
+    """Keeps the last LIVE_KEEP_DAYS of metrics.csv parsed, reading only the tail.
+
+    First call: reads the header, then jumps near the end of the file, so a
+    week of history is not parsed just to show today. Later calls read only
+    the bytes appended since, up to the last complete line: a row the logger
+    is still writing is picked up next time, never half-parsed. If the file
+    shrinks (rotation, schema migration) it is re-read from scratch.
+    """
+
+    def __init__(self, csv_path: Path, keep_days: float = LIVE_KEEP_DAYS) -> None:
         self.csv_path = Path(csv_path)
-        self.max_rows = max_rows
-        self._offset = 0
-        self._size = 0
-        self._fieldnames: list[str] | None = None
-        self._rows: list[dict] = []
+        self.keep_days = keep_days
+        self.on_drop = None   # callable(_Series) given points that age out
+        self._reset()
 
     def _reset(self) -> None:
         self._offset = 0
-        self._size = 0
-        self._fieldnames = None
-        self._rows = []
+        self._header: list[str] | None = None
+        self.series = _Series()
 
-    def read(self) -> list[dict]:
+    def read(self) -> _Series:
         try:
-            stat = self.csv_path.stat()
-        except FileNotFoundError:
+            size = self.csv_path.stat().st_size
+        except OSError:
             self._reset()
-            return []
-
-        # File shrank (rotation) — invalidate everything
-        if stat.st_size < self._size:
-            log.debug("CSV shrank from %d to %d bytes; invalidating cache",
-                      self._size, stat.st_size)
+            return self.series
+        if size < self._offset:
+            log.debug("CSV shrank below offset %d (now %d); re-reading", self._offset, size)
             self._reset()
-
-        # No change since last read — return cached
-        if stat.st_size == self._size and self._rows:
-            return list(self._rows)
-
+        if size == self._offset:
+            return self.series
         try:
-            with self.csv_path.open("r", encoding="utf-8", newline="") as f:
-                if self._offset == 0:
-                    # First read — parse header normally
-                    reader = csv.DictReader(f)
-                    self._fieldnames = list(reader.fieldnames or [])
-                    for row in reader:
-                        self._rows.append(row)
-                    self._offset = f.tell()
-                else:
-                    # Tail read — seek past header + already-consumed rows
-                    f.seek(self._offset)
-                    new_reader = csv.DictReader(f, fieldnames=self._fieldnames)
-                    for row in new_reader:
-                        # Guard: empty trailing line
-                        if not row or not any(row.values()):
-                            continue
-                        self._rows.append(row)
-                    self._offset = f.tell()
+            with self.csv_path.open("rb") as f:
+                if self._header is None:
+                    first = f.readline()
+                    if not first.endswith(b"\n"):
+                        return self.series   # header still being written
+                    self._header = next(csv.reader([first.decode("utf-8", "replace")]), [])
+                    start = f.tell()
+                    tail = size - int(self.keep_days * 86400 * _ROW_BYTES_ESTIMATE)
+                    if tail > start:
+                        f.seek(tail - 1)
+                        f.readline()          # land on a line boundary
+                        start = f.tell()
+                    self._offset = start
+                f.seek(self._offset)
+                data = f.read(size - self._offset)
         except OSError:
             log.exception("Failed to read CSV %s incrementally", self.csv_path)
-            return list(self._rows)
+            return self.series
+        end = data.rfind(b"\n") + 1
+        if end:
+            lines = data[:end].decode("utf-8", errors="replace").splitlines()
+            self.series.extend_from_rows(csv.reader(lines), self._header)
+            self._offset += end
+        self._trim()
+        return self.series
 
-        self._size = stat.st_size
-        # Bound memory — keep only the tail
-        if len(self._rows) > self.max_rows:
-            self._rows = self._rows[-self.max_rows:]
-        return list(self._rows)
+    def _trim(self) -> None:
+        t = self.series.t
+        # 10 % slack: trimming shifts the arrays, so do it rarely.
+        if len(t) and t[0] < t[-1] - self.keep_days * 1.1:
+            old = self.series.drop_before(t[-1] - self.keep_days)
+            if self.on_drop is not None and len(old):
+                self.on_drop(old)
 
 
-def _parse_series(rows: list[dict]) -> dict:
-    """Convert CSV rows into parallel lists for plotting."""
-    times: list[datetime] = []
-    cpu: list[float] = []
-    ram: list[float] = []
-    disk: list[float | None] = []
-    swap: list[float | None] = []
-    temps: list[float | None] = []
-    vram: list[float | None] = []
+def _bucket_max(t, cols: dict, starts):
+    """One point per bucket (bucket i spans starts[i]..starts[i+1]).
 
-    for r in rows:
-        ts_raw = (r.get("timestamp_iso") or "").strip()
-        try:
-            ts = datetime.fromisoformat(ts_raw)
-        except (ValueError, TypeError):
-            continue
-        try:
-            c = float(r.get("cpu_percent") or "")
-            rm = float(r.get("ram_percent") or "")
-        except (ValueError, TypeError):
-            continue
-        times.append(ts)
-        cpu.append(c)
-        ram.append(rm)
-        for series, key in ((disk, "disk_percent"), (swap, "swap_percent"),
-                            (temps, "temp_celsius"), (vram, "vram_percent")):
-            raw = (r.get(key) or "").strip()
+    Time is the bucket's first sample; each metric its max, NaN ignored
+    unless the whole bucket is NaN.
+    """
+    import numpy as np
+    return t[starts], {k: np.fmax.reduceat(v, starts) for k, v in cols.items()}
+
+
+def _to_minutes(t, cols: dict):
+    """Collapse sorted numpy series to one point per ARCHIVE_BUCKET_DAYS."""
+    import numpy as np
+    if not len(t):
+        return t.copy(), {k: v.copy() for k, v in cols.items()}
+    bucket = np.floor(t / ARCHIVE_BUCKET_DAYS)
+    starts = np.flatnonzero(np.r_[True, bucket[1:] != bucket[:-1]])
+    return _bucket_max(t, cols, starts)
+
+
+class _ArchiveSeries:
+    """Per-minute view of everything older than the live reader holds.
+
+    Built on first use of the archive toggle (archive files + the older part
+    of metrics.csv the live reader skipped), extended as the live reader ages
+    points out, rebuilt only when the archive files change (daily rotation).
+    """
+
+    def __init__(self, history_dir: Path, live: _IncrementalSeriesReader) -> None:
+        self.history_dir = Path(history_dir)
+        self.live = live
+        self._signature: tuple | None = None
+        self.t = None
+        self.cols: dict = {}
+        live.on_drop = self._absorb
+
+    def _files(self) -> list[Path]:
+        from metric_history import ARCHIVE_PREFIX, ARCHIVE_SUFFIX
+        return sorted(self.history_dir.glob(f"{ARCHIVE_PREFIX}*{ARCHIVE_SUFFIX}"))
+
+    @staticmethod
+    def _sig(files: list[Path]) -> tuple:
+        out = []
+        for p in files:
             try:
-                series.append(float(raw) if raw else None)
-            except ValueError:
-                series.append(None)
-    return {"times": times, "cpu": cpu, "ram": ram, "disk": disk,
-            "swap": swap, "temps": temps, "vram": vram}
+                st = p.stat()
+            except OSError:
+                continue
+            out.append((p.name, st.st_size, st.st_mtime))
+        return tuple(out)
+
+    def get(self):
+        files = self._files()
+        sig = self._sig(files)
+        if self.t is None or sig != self._signature:
+            self._build(files)
+            self._signature = sig
+        return self.t, self.cols
+
+    def _build(self, files: list[Path]) -> None:
+        import numpy as np
+        live = self.live.series
+        live_start = live.t[0] if len(live) else float("inf")
+        parts_t, parts = [], {k: [] for k in _METRIC_COLUMNS}
+        # One file at a time, reduced to minutes right away: a quarter of
+        # per-second archives never sits in memory at once.
+        for src in files + [self.live.csv_path]:
+            s = _Series()
+            try:
+                with src.open("r", encoding="utf-8", newline="", errors="replace") as f:
+                    reader = csv.reader(f)
+                    header = next(reader, None)
+                    if header:
+                        s.extend_from_rows(reader, header)
+            except OSError:
+                log.exception("Failed to read history source %s", src)
+                continue
+            t, cols = s.view()
+            keep = t < live_start
+            order = np.argsort(t[keep], kind="stable")
+            mt, mcols = _to_minutes(t[keep][order], {k: v[keep][order] for k, v in cols.items()})
+            del t, cols
+            parts_t.append(mt)
+            for k in parts:
+                parts[k].append(mcols[k])
+        if not parts_t:
+            self.t, self.cols = np.empty(0), {k: np.empty(0) for k in _METRIC_COLUMNS}
+            return
+        t = np.concatenate(parts_t)
+        order = np.argsort(t, kind="stable")
+        self.t = t[order]
+        self.cols = {k: np.concatenate(v)[order] for k, v in parts.items()}
+
+    def _absorb(self, old: _Series) -> None:
+        if self.t is None:
+            return
+        import numpy as np
+        t, cols = _to_minutes(*old.view())
+        self.t = np.concatenate([self.t, t])
+        self.cols = {k: np.concatenate([self.cols[k], cols[k]]) for k in cols}
+
+
+def _window(t, cols: dict, start: float | None):
+    """Slice sorted numpy series to t >= start, then cap at MAX_PLOT_POINTS.
+
+    Always returns fresh arrays (never views), plus the in-window point count
+    before reduction.
+    """
+    import numpy as np
+    lo = 0 if start is None else int(np.searchsorted(t, start, side="left"))
+    lo = min(lo, max(0, len(t) - 1))      # keep at least the newest point
+    t = t[lo:]
+    cols = {k: v[lo:] for k, v in cols.items()}
+    raw_n = len(t)
+    if raw_n > MAX_PLOT_POINTS:
+        step = -(-raw_n // MAX_PLOT_POINTS)
+        t, cols = _bucket_max(t, cols, np.arange(0, raw_n, step))
+    else:
+        t, cols = t.copy(), {k: v.copy() for k, v in cols.items()}
+    return t, cols, raw_n
 
 
 def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
@@ -328,6 +510,7 @@ def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
         import matplotlib
         matplotlib.use("TkAgg")
         import matplotlib.dates as mdates
+        import numpy as np
         from matplotlib.backends.backend_tkagg import (
             FigureCanvasTkAgg, NavigationToolbar2Tk,
         )
@@ -489,142 +672,154 @@ def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
                 return mins
         return 15
 
-    # Incremental reader for the common case (main CSV only, no archive merge).
-    # Avoids re-parsing a 1.5 MB file every 2 seconds.
-    incremental = _IncrementalCsvReader(history_dir / "metrics.csv", max_rows=50_000)
+    # Static styling happens once; each refresh only moves data into the
+    # artists below (no ax.clear(), no re-styling, no new Line2D objects).
+    _style_axes()
+    ax1.xaxis_date()
+    ax1.set_title("system metrics", color=DIM, fontsize=10, fontweight="normal",
+                  pad=12, loc="left")
+    ax1.set_xlabel("")
+    fig.subplots_adjust(left=0.05, right=0.93, top=0.90, bottom=0.12)
+
+    def _line(ax, color, width, alpha=1.0, label=None, rounded=False):
+        style = {"solid_capstyle": "round", "solid_joinstyle": "round"} if rounded else {}
+        return ax.plot([], [], color=color, linewidth=width, alpha=alpha,
+                       label=label, **style)[0]
+
+    lines = {
+        "cpu": _line(ax1, CPU_C, 1.3, label="CPU", rounded=True),
+        "ram": _line(ax1, RAM_C, 1.3, label="RAM", rounded=True),
+        "disk": _line(ax1, DISK_C, 1.0, 0.7, "Disk"),
+        "swap": _line(ax1, SWAP_C, 1.0, 0.7, "Swap"),
+        "vram": _line(ax1, VRAM_C, 1.0, 0.75, "VRAM"),
+        "temps": _line(ax2, TEMP_C, 1.0, 0.85, "Temp"),
+    }
+    toggles = {"disk": show_disk, "swap": show_swap, "vram": show_vram, "temps": show_temp}
+    # Last-point markers and inline end-of-line labels for CPU and RAM.
+    dots = {k: ax1.plot([], [], "o", color=c, markersize=28 ** 0.5,
+                        markeredgewidth=0, zorder=5)[0]
+            for k, c in (("cpu", CPU_C), ("ram", RAM_C))}
+    end_labels = {k: ax1.annotate("", xy=(0, 0), xytext=(6, 0), textcoords="offset points",
+                                  color=c, fontsize=10, fontweight="bold", va="center",
+                                  visible=False)
+                  for k, c in (("cpu", CPU_C), ("ram", RAM_C))}
+    waiting_text = ax1.text(0.5, 0.5, "Waiting for samples...", ha="center", va="center",
+                            transform=ax1.transAxes, color=DIM, fontsize=12, visible=False)
+    state: dict = {"fill": None, "fmt": None, "key": None, "archive": None}
+
+    # Incremental reader: each refresh parses only rows appended since the last.
+    incremental = _IncrementalSeriesReader(history_dir / "metrics.csv")
 
     def redraw() -> None:
+        series = incremental.read()
+        arch_t = arch_cols = None
         if include_archive.get():
-            # Archive merge requires reading multiple files — bypass incremental
-            rows = _read_rows(history_dir, include_archive=True)
-        else:
-            rows = incremental.read()
-        series = _parse_series(rows)
-        ax1.clear()
-        ax2.clear()
-        _style_axes()
+            if state["archive"] is None:
+                state["archive"] = _ArchiveSeries(history_dir, incremental)
+            arch_t, arch_cols = state["archive"].get()
+        window_min = _selected_window_minutes()
 
-        all_times = series["times"]
-        if len(all_times) < 2:
-            ax1.text(0.5, 0.5, "Waiting for samples...",
-                     ha="center", va="center", transform=ax1.transAxes,
-                     color=DIM, fontsize=12)
+        # Nothing new and no setting changed: skip the whole render.
+        key = (len(series), series.t[-1] if len(series) else None,
+               None if arch_t is None else len(arch_t), window_min,
+               tuple(v.get() for v in toggles.values()))
+        if key == state["key"]:
+            return
+        state["key"] = key
+
+        if len(series):
+            newest = series.t[-1]
+        elif arch_t is not None and len(arch_t):
+            newest = float(arch_t[-1])
+        else:
+            newest = None
+        total = len(series) + (0 if arch_t is None else len(arch_t))
+
+        if newest is None or total < 2:
+            for artist in (*lines.values(), *dots.values()):
+                artist.set_data([], [])
+            for lbl in end_labels.values():
+                lbl.set_visible(False)
+            if state["fill"] is not None:
+                state["fill"].remove()
+                state["fill"] = None
+            waiting_text.set_visible(True)
             status_var.set(tr("ממתין לדגימות…", "Waiting for samples…"))
             canvas.draw_idle()
             return
+        waiting_text.set_visible(False)
 
-        # Window filtering: keep only points within the selected window
-        from datetime import timedelta
-        window_min = _selected_window_minutes()
-        if window_min is not None:
-            cutoff = all_times[-1] - timedelta(minutes=window_min)
-            keep_idx = [i for i, t in enumerate(all_times) if t >= cutoff]
-            if not keep_idx:
-                keep_idx = [len(all_times) - 1]
-        else:
-            keep_idx = list(range(len(all_times)))
+        start = None if window_min is None else newest - window_min / 1440.0
+        lo = 0 if start is None else bisect_left(series.t, start)
+        t, cols = series.view(lo)
+        if arch_t is not None and len(arch_t):
+            a_lo = 0 if start is None else int(np.searchsorted(arch_t, start))
+            t = np.concatenate([arch_t[a_lo:], t])
+            cols = {k: np.concatenate([arch_cols[k][a_lo:], cols[k]]) for k in cols}
+        latest = {k: float(v[-1]) for k, v in cols.items()}
+        t, cols, raw_n = _window(t, cols, start)   # fresh arrays; views released
 
-        def _slice(values):
-            return [values[i] for i in keep_idx]
-
-        t = _slice(all_times)
-        cpu = _slice(series["cpu"])
-        ram = _slice(series["ram"])
-        disk_v = _slice(series["disk"])
-        swap_v = _slice(series["swap"])
-        temps_v = _slice(series["temps"])
-        vram_v = _slice(series.get("vram", []) or [None] * len(all_times))
+        for k, line in lines.items():
+            v = cols[k]
+            shown = (k not in toggles or toggles[k].get()) and not np.isnan(v).all()
+            line.set_visible(shown)
+            line.set_data(t, v) if shown else line.set_data([], [])
 
         # Subtle area fill under CPU only — gives a sense of "load", very faint
-        ax1.fill_between(t, cpu, 0, color=CPU_C, alpha=0.06, linewidth=0)
+        if state["fill"] is not None:
+            state["fill"].remove()
+        state["fill"] = ax1.fill_between(t, cols["cpu"], 0, color=CPU_C, alpha=0.06,
+                                         linewidth=0)
 
-        # Crisp, thin lines — single pass, no glow
-        ax1.plot(t, cpu, color=CPU_C, linewidth=1.3,
-                 solid_capstyle="round", solid_joinstyle="round", label="CPU")
-        ax1.plot(t, ram, color=RAM_C, linewidth=1.3,
-                 solid_capstyle="round", solid_joinstyle="round", label="RAM")
-
-        if show_disk.get() and any(v is not None for v in disk_v):
-            disk_clean = [v if v is not None else float("nan") for v in disk_v]
-            ax1.plot(t, disk_clean, color=DISK_C, linewidth=1.0,
-                     alpha=0.7, label="Disk")
-        if show_swap.get() and any(v is not None for v in swap_v):
-            swap_clean = [v if v is not None else float("nan") for v in swap_v]
-            ax1.plot(t, swap_clean, color=SWAP_C, linewidth=1.0,
-                     alpha=0.7, label="Swap")
-        if show_vram.get() and any(v is not None for v in vram_v):
-            vram_clean = [v if v is not None else float("nan") for v in vram_v]
-            ax1.plot(t, vram_clean, color=VRAM_C, linewidth=1.0,
-                     alpha=0.75, label="VRAM")
-        if show_temp.get() and any(v is not None for v in temps_v):
-            temps_clean = [v if v is not None else float("nan") for v in temps_v]
-            ax2.plot(t, temps_clean, color=TEMP_C, linewidth=1.0,
-                     alpha=0.85, label="Temp")
-
-        # Last-point markers: small filled dot, no white sparkle
-        for value, color in ((cpu[-1], CPU_C), (ram[-1], RAM_C)):
-            ax1.scatter([t[-1]], [value], color=color, s=28, zorder=5,
-                        edgecolors="none")
-
-        # Inline labels at the end of each line — Vercel/Tremor style:
-        # plain colored text floating to the right of the latest point, no box
-        for value, color in ((cpu[-1], CPU_C), (ram[-1], RAM_C)):
-            ax1.annotate(
-                f"  {value:.0f}%",
-                xy=(t[-1], value),
-                xytext=(6, 0), textcoords="offset points",
-                color=color, fontsize=10, fontweight="bold",
-                va="center",
-            )
+        t_last = float(t[-1])
+        for k in ("cpu", "ram"):
+            dots[k].set_data([t_last], [latest[k]])
+            end_labels[k].xy = (t_last, latest[k])
+            end_labels[k].set_text(f"  {latest[k]:.0f}%")
+            end_labels[k].set_visible(True)
 
         # Force x-limits to the window bounds (so chart "scrolls" as time advances)
         if window_min is not None:
-            xmin = t[-1] - timedelta(minutes=window_min)
-            xmax = t[-1] + timedelta(seconds=max(2, window_min * 60 * 0.02))
+            xmin = newest - window_min / 1440.0
+            xmax = t_last + max(2, window_min * 60 * 0.02) / 86400.0
         else:
-            xmin = t[0]
-            xmax = t[-1] + timedelta(seconds=2)
+            xmin = float(t[0])
+            xmax = t_last + 2 / 86400.0
         ax1.set_xlim(xmin, xmax)
+        ax2.relim(visible_only=True)
+        ax2.autoscale_view(scalex=False)
 
-        # Vercel-style: small subtitle in muted gray + big inline metrics
-        # Show only the subtitle as the chart's matplotlib title; the live
-        # values are conveyed by the inline end-of-line labels above.
-        ax1.set_title(
-            "system metrics",
-            color=DIM, fontsize=10, fontweight="normal",
-            pad=12, loc="left",
-        )
-        ax1.set_xlabel("")
         # Pick a sensible time format based on window length
         if window_min is None or window_min >= 1440:
-            ax1.xaxis.set_major_formatter(mdates.DateFormatter("%m-%d %H:%M"))
+            fmt = "%m-%d %H:%M"
         elif window_min >= 60:
-            ax1.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
+            fmt = "%H:%M"
         else:
-            ax1.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
-
-        # No matplotlib legend — inline labels at line ends do the job
-        if ax1.get_legend() is not None:
-            ax1.get_legend().remove()
-
-        fig.autofmt_xdate()
-        fig.subplots_adjust(left=0.05, right=0.93, top=0.90, bottom=0.12)
+            fmt = "%H:%M:%S"
+        if fmt != state["fmt"]:
+            ax1.xaxis.set_major_formatter(mdates.DateFormatter(fmt))
+            # Tilted labels: ticks created later copy this from the first one.
+            fig.autofmt_xdate(bottom=0.12)
+            state["fmt"] = fmt
         canvas.draw_idle()
 
-        latest = (f"CPU {cpu[-1]:.0f}%  RAM {ram[-1]:.0f}%"
-                  + (f"  Disk {disk_v[-1]:.0f}%" if disk_v[-1] is not None else "")
-                  + (f"  Temp {temps_v[-1]:.0f}°C" if temps_v[-1] is not None else ""))
+        disk_now, temp_now = latest["disk"], latest["temps"]
+        now_txt = (f"CPU {latest['cpu']:.0f}%  RAM {latest['ram']:.0f}%"
+                   + (f"  Disk {disk_now:.0f}%" if disk_now == disk_now else "")
+                   + (f"  Temp {temp_now:.0f}°C" if temp_now == temp_now else ""))
         status_var.set(tr(
             f"רענון אחרון: {datetime.now().strftime('%H:%M:%S')}  ·  "
-            f"{len(t)}/{len(all_times)} נקודות בחלון  ·  עכשיו: {latest}",
+            f"{raw_n}/{total} נקודות בחלון  ·  עכשיו: {now_txt}",
             f"Last refresh: {datetime.now().strftime('%H:%M:%S')}  ·  "
-            f"{len(t)}/{len(all_times)} points in window  ·  now: {latest}",
+            f"{raw_n}/{total} points in window  ·  now: {now_txt}",
         ))
 
     def tick() -> None:
         if not win.winfo_exists():
             return
-        if not paused.get():
+        # Minimised or paused: nobody is looking, so don't render. The next
+        # visible tick catches up in one go (only new rows are parsed).
+        if not paused.get() and win.state() not in ("iconic", "withdrawn"):
             try:
                 redraw()
             except Exception:
