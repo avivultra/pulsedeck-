@@ -207,11 +207,31 @@ look are all welcome as pull requests.
   "which project keeps leaking processes" and "do ghosts pile up or get
   cleaned up". Command lines are **always masked here**, regardless of the
   panel's display toggle — a log file outlives the session
+- **Per-program history** in `history/processes.sqlite` — every 30 s, the
+  heaviest programs (same-name processes folded) with average CPU, peak memory
+  and process count; 7 days kept, under ~4 MB a day, fed from the existing
+  process sampler (no extra scan). Answers "who slowed the PC at 15:02?"
 - **Application log** in `history/monitor.log` (rotated, configurable level)
 - **Freeze log** in `history/freeze.log` — if the dock stops responding for
   30 s, the stack of every thread is written here (via `faulthandler`, which
   works even when the whole interpreter is stuck). Empty apart from one
   start-up line per session means no freezes
+
+### Use with Claude Code (MCP)
+`pulsedeck_mcp.py` lets Claude Code ask PulseDeck what is running and clean up
+after itself. It starts only while an agent is connected (stdio, no service)
+and needs no extra package. Register it once for all projects:
+
+```
+claude mcp add --scope user pulsedeck -- python "C:\path\to\pulsedeck_mcp.py"
+```
+
+Tools: `pulsedeck_status`, `pulsedeck_leftovers` (processes running from the
+project folder, with ports, connections, memory, age), `pulsedeck_port`,
+`pulsedeck_slow_at` (who was busy at a past time, from the per-program
+history) and `pulsedeck_close` (one process from that folder; refuses system
+processes, editors, terminals and anything with open connections, and Claude
+Code asks you before every call).
 
 ---
 
@@ -320,6 +340,8 @@ monitor.py            ← entry point; sets up logging, config, dispatchers
 ├── vault_graph.py    ← what the bubbles are + the force layout (no Tk)
 ├── vault_sprites.py  ← Pillow-rendered bubble images, cached
 ├── live_chart.py     ← history data layer, spike parsing, alerts panel
+├── process_history.py ← per-program history (SQLite, 30 s roll-ups)
+├── pulsedeck_mcp.py  ← MCP server for Claude Code (stdio, no dependency)
 ├── ai_advisor.py     ← Ask Claude: snapshot + Messages API call
 ├── claude_panel.py   ← the Ask Claude window
 ├── self_usage.py     ← PulseDeck's own CPU / memory, shown in the UI
