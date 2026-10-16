@@ -54,6 +54,9 @@ class ProcessSampler:
         self._create_time: dict[int, float] = {}
         self._first_seen: dict[int, float] = {}
         self._primed: set[int] = set()  # PIDs that had cpu_percent primed already
+        # Optional per-program history (process_history.ProcessHistory); fed
+        # from this thread after every tick, so it costs no extra scan.
+        self.recorder = None
 
     def notify_activity(self) -> None:
         """Mark the sampler as 'active' (e.g. just after a spike or UI open).
@@ -159,6 +162,11 @@ class ProcessSampler:
 
         with self._lock:
             self._snapshot = live
+        if self.recorder is not None:
+            try:
+                self.recorder.offer(live, now)
+            except Exception:
+                log.exception("Process history recording failed")
 
     def _snapshot_copy(self) -> list[ProcessInfo]:
         with self._lock:
@@ -188,6 +196,11 @@ def get_default_sampler() -> ProcessSampler:
     with _default_lock:
         if _default_sampler is None:
             _default_sampler = ProcessSampler()
+            try:
+                from process_history import get_default_history
+                _default_sampler.recorder = get_default_history()
+            except Exception:
+                log.exception("Process history unavailable")
             _default_sampler.start()
         return _default_sampler
 

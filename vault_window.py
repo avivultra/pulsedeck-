@@ -1015,8 +1015,32 @@ class VaultWindow:
                 else:
                     self._w(name, "p")
                 self._w("\n", "p")
+        busy = self._busy_at(d["time"])
+        if busy and busy["cpu"]:
+            # From the per-program history: who actually used the CPU around
+            # that minute (the spike report only knew who held memory).
+            self._w(tr("מי עבד על המעבד באותו רגע", "Who was using the CPU then") + "\n", "h2")
+            for item in busy["cpu"][:5]:
+                key = "prog:" + item["name"]
+                self._w("• ", "p")
+                if key in self.layout.nodes:
+                    self._link(item["name"], key)
+                else:
+                    self._w(item["name"], "p")
+                self._w(f"  {item['cpu']:.1f}%\n", "p")
         self._button("✳ " + tr("שאל את Claude מה קרה", "Ask Claude what happened"), self.ask_claude,
                      color=CLAUDE, bg="#2d211c")
+
+    def _busy_at(self, hhmmss: str) -> dict | None:
+        """Who was busy around today's HH:MM:SS, from process_history."""
+        try:
+            from process_history import get_default_history
+            h, m, sec = (int(x) for x in hhmmss.split(":"))
+            t = datetime.now().replace(hour=h, minute=m, second=sec, microsecond=0).timestamp()
+            return get_default_history().around(t)
+        except Exception:
+            log.debug("No process history for %s", hhmmss, exc_info=True)
+            return None
 
     def _note_ghost(self, n):
         d = n.data

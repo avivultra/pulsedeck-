@@ -18,6 +18,7 @@ history/regular/
 history/spikes/
 history/*.log
 history/*.csv
+history/*.sqlite*
 history/*.png
 history/spike_reports.md
 
