@@ -130,10 +130,12 @@ def tool_status(_args: dict) -> str:
 
 def leftovers(folder: str) -> list[dict]:
     """Processes whose working folder (or command line) is inside `folder`."""
-    from ghost_sweeper import _connection_map, protected_dir_of
+    from ghost_sweeper import _connection_map, normalize_dirs, protected_dir_of
     listening, established = _connection_map()
     protected = _protected_pids()
     servers = _server_dirs()
+    # Same boundary rules as server_cwds: E:\proj must not match E:\proj2\x.py.
+    target = normalize_dirs([_norm(folder)])
     now = time.time()
     out = []
     for p in psutil.process_iter(["pid", "name", "create_time", "memory_info", "cpu_times"]):
@@ -149,7 +151,7 @@ def leftovers(folder: str) -> list[dict]:
         if cmd is None and not _under(cwd, folder):
             continue
         cmd = cmd or ""
-        if not _under(cwd, folder) and _norm(folder) not in os.path.normcase(cmd):
+        if not _under(cwd, folder) and not protected_dir_of("", cmd, target):
             continue
         if is_pulsedeck(cmd):
             continue

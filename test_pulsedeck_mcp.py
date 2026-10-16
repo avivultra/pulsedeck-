@@ -148,6 +148,28 @@ class ServerFoldersAreNeverClosedTest(unittest.TestCase):
                 pulsedeck_mcp.tool_close({"pid": 5151, "folder": root})
         terminate.assert_not_called()
 
+    def test_a_sibling_folder_sharing_a_prefix_is_not_a_leftover(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        root = Path(tempfile.mkdtemp())
+
+        def fake(pid, script):
+            p = mock.Mock()
+            p.info = {"pid": pid, "name": "node.exe", "create_time": 1000.0,
+                      "memory_info": SimpleNamespace(rss=1), "cpu_times": None}
+            p.cwd.return_value = ""
+            p.cmdline.return_value = ["node.exe", str(script)]
+            p.parent.return_value = None
+            return p
+
+        mine = fake(1, root / "proj" / "server.js")
+        sibling = fake(2, root / "proj2" / "server.js")
+        with mock.patch.object(pulsedeck_mcp.psutil, "process_iter", return_value=[mine, sibling]), \
+             mock.patch.object(pulsedeck_mcp, "_protected_pids", return_value=set()), \
+             mock.patch.object(pulsedeck_mcp, "_server_dirs", return_value=()), \
+             mock.patch("ghost_sweeper._connection_map", return_value=({}, {})):
+            self.assertEqual([d["pid"] for d in pulsedeck_mcp.leftovers(str(root / "proj"))], [1])
+
     def test_server_dirs_are_read_without_creating_config(self):
         from unittest import mock
         with tempfile.TemporaryDirectory() as tmp:
