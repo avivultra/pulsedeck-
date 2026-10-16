@@ -119,6 +119,10 @@ look are all welcome as pull requests.
   Claude, close). File tree and search on the side, F11 for full screen. The
   physics sleeps once bubbles settle; bubbles are Pillow-rendered images,
   cached, so an open idle window costs well under 1 % of a core
+- **Why was it slow?** (⏱ in the vault) — finds the stretches of the last
+  hour, today or yesterday when CPU stayed above 70 % or memory above 85 %
+  for over half a minute, and names who worked hardest in those minutes from
+  the per-program history; one click sends the summary to Ask Claude
 - **Ask Claude** — on demand only: sends program names and numbers (no command
   lines or paths) and shows a plain-words answer. Key goes in `.env`
 
@@ -341,6 +345,7 @@ monitor.py            ← entry point; sets up logging, config, dispatchers
 ├── vault_sprites.py  ← Pillow-rendered bubble images, cached
 ├── live_chart.py     ← history data layer, spike parsing, alerts panel
 ├── process_history.py ← per-program history (SQLite, 30 s roll-ups)
+├── slowdown.py       ← finds slow moments and names who was behind them
 ├── pulsedeck_mcp.py  ← MCP server for Claude Code (stdio, no dependency)
 ├── ai_advisor.py     ← Ask Claude: snapshot + Messages API call
 ├── claude_panel.py   ← the Ask Claude window

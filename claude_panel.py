@@ -27,8 +27,10 @@ ACCENT = "#d97757"
 FONT = "Segoe UI"
 
 
-def open_claude_panel(parent: tk.Misc, snapshot_fn: Callable[[], dict]) -> tk.Toplevel:
-    """Open the panel and immediately ask "what is going on right now?"."""
+def open_claude_panel(parent: tk.Misc, snapshot_fn: Callable[[], dict],
+                      first_question: str | None = None) -> tk.Toplevel:
+    """Open the panel and immediately ask `first_question` (default: "what is
+    going on right now?")."""
     import ai_advisor
 
     win = tk.Toplevel(parent)
@@ -117,7 +119,7 @@ def open_claude_panel(parent: tk.Misc, snapshot_fn: Callable[[], dict]) -> tk.To
     entry.bind("<Return>", _on_send)
 
     if ai_advisor.is_configured():
-        _ask()
+        _ask(first_question)
     else:
         _show(tr(
             "כדי לחבר את Claude:\n\n"

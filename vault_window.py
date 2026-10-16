@@ -16,7 +16,7 @@ import logging
 import os
 import time
 import tkinter as tk
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import psutil
@@ -153,6 +153,7 @@ class VaultWindow:
         self.refresh()
         self.layout.settle(600)
         self.win.after(60, self.fit)
+        self.win.after(500, self.fit)      # again once the window has its real size
         self.win.after(REFRESH_MS, self._tick)
         if parent is None:
             self.win.mainloop()
@@ -173,6 +174,7 @@ class VaultWindow:
         for glyph, tip, cmd in (("◈", tr("גרף", "Graph"), self.fit),
                                 ("⌕", tr("חיפוש", "Search"), lambda: self.search.focus_set()),
                                 ("✳", tr("שאל את Claude", "Ask Claude"), self.ask_claude),
+                                ("⏱", tr("למה המחשב היה איטי?", "Why was it slow?"), lambda: self.open_slow()),
                                 ("↻", tr("סדר מחדש", "Rearrange"), self.shake),
                                 ("⛶", tr("מסך מלא (F11)", "Full screen (F11)"), self.toggle_full)):
             b = self._label(self.ribbon, glyph, fg=ACCENT if glyph == "◈" else FG_FAINT, size=13,
@@ -377,7 +379,7 @@ class VaultWindow:
 
         nodes, links = build_graph(programs, resources, ghosts, events, tr("המחשב שלי", "My computer"))
         self.layout.update(nodes, links)
-        if self.selected and self.selected not in nodes:
+        if self.selected and self.selected != "slow" and self.selected not in nodes:
             self.selected = None
         self._update_status(snap)
         self._fill_tree()
@@ -462,6 +464,8 @@ class VaultWindow:
             return
         k = self.view["k"]
         focus = self.hover or self.selected
+        if focus not in self.layout.nodes:     # e.g. the "why was it slow?" page
+            focus = None
         near = self._neighbors(focus) if focus else None
         c.delete("link")
         nodes = self.layout.nodes
@@ -712,7 +716,7 @@ class VaultWindow:
             self.win.state("zoomed" if self.full else "normal")
         self.win.after(120, self.fit)
 
-    def ask_claude(self) -> None:
+    def ask_claude(self, extra: dict | None = None, question: str | None = None) -> None:
         try:
             from ai_advisor import build_snapshot
             from claude_panel import open_claude_panel
@@ -720,8 +724,10 @@ class VaultWindow:
 
             def snapshot():
                 groups = [(g.name, g.cpu, g.rss, g.count) for g in self._groups]
-                return build_snapshot(self._snap, groups, self._events, gpu_temp=read_gpu_temp_celsius())
-            open_claude_panel(self.win, snapshot)
+                snap = build_snapshot(self._snap, groups, self._events, gpu_temp=read_gpu_temp_celsius())
+                snap.update(extra or {})
+                return snap
+            open_claude_panel(self.win, snapshot, question)
         except Exception:
             log.exception("Could not open the Ask Claude panel")
 
@@ -766,13 +772,15 @@ class VaultWindow:
             if meta:
                 t.insert("end", meta, tags + ("meta",))
             t.insert("end", "\n", tags)
-            t.tag_bind("k:" + key, "<Button-1>", lambda _e, k=key: self.focus_node(k))
+            t.tag_bind("k:" + key, "<Button-1>",
+                       lambda _e, k=key: self.open_slow() if k == "slow" else self.focus_node(k))
             t.tag_bind("k:" + key, "<Enter>", lambda _e: t.configure(cursor="hand2"))
             t.tag_bind("k:" + key, "<Leave>", lambda _e: t.configure(cursor="arrow"))
 
         nodes = self.layout.nodes
         t.insert("end", "▾ 📂 " + tr("המחשב", "Computer") + "\n", "folder")
         file("pc", tr("עכשיו", "Now"))
+        file("slow", tr("למה המחשב היה איטי?", "Why was it slow?"))
         for n in nodes.values():
             if n.kind == "res":
                 file(n.key, n.label, n.data["text"])
@@ -880,7 +888,9 @@ class VaultWindow:
         note.delete("1.0", "end")
         n = self.layout.nodes.get(key) if key else None
         try:
-            if n is None or n.kind == "pc":
+            if key == "slow":
+                self._note_slow()
+            elif n is None or n.kind == "pc":
                 self._note_now()
             elif n.kind == "prog":
                 self._note_prog(n)
@@ -946,6 +956,7 @@ class VaultWindow:
                    "process. Drag any bubble.\n"), "p")
         self._button("✳ " + tr("שאל את Claude מה קורה", "Ask Claude what is going on"), self.ask_claude,
                      color=CLAUDE, bg="#2d211c")
+        self._button("⏱ " + tr("למה המחשב היה איטי?", "Why was it slow?"), lambda: self.open_slow())
 
     def _note_prog(self, n):
         g = n.data["group"]
@@ -1063,3 +1074,110 @@ class VaultWindow:
                    "plain words what is going on and what to do.\n"), "p")
         self._button("✳ " + tr("שאל מה קורה עכשיו", "Ask what is going on"), self.ask_claude,
                      color=CLAUDE, bg="#2d211c")
+
+    # ================================================================ why was it slow?
+    _SLOW_RANGES = ("hour", "today", "yesterday")
+
+    def open_slow(self, rng: str | None = None) -> None:
+        if rng:
+            self._slow_range = rng
+        self.selected = "slow"
+        self.show_note("slow")
+        self._fill_tree()
+        self.render()
+
+    def _slow_window(self, rng: str) -> tuple[datetime, datetime, str]:
+        now = datetime.now()
+        midnight = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        if rng == "hour":
+            return now - timedelta(hours=1), now, tr("בשעה האחרונה", "in the last hour")
+        if rng == "yesterday":
+            return midnight - timedelta(days=1), midnight, tr("אתמול", "yesterday")
+        return midnight, now, tr("היום", "today")
+
+    def _slow_data(self, t0: datetime, t1: datetime):
+        """(t days, cpu, ram) numpy copies for [t0, t1] from the CSV history."""
+        import numpy as np
+        from bisect import bisect_left
+
+        from live_chart import _IncrementalSeriesReader, _wall_days
+        if not hasattr(self, "_reader"):
+            self._reader = _IncrementalSeriesReader(self.history_dir / "metrics.csv")
+        s = self._reader.read()
+        lo, hi = bisect_left(s.t, _wall_days(t0)), bisect_left(s.t, _wall_days(t1))
+        t, cols = s.view(lo)
+        n = max(0, hi - lo)
+        return np.array(t[:n]), np.array(cols["cpu"][:n]), np.array(cols["ram"][:n])
+
+    def _note_slow(self):
+        from process_history import get_default_history
+        from slowdown import days_to_datetime, describe, find_episodes
+
+        rng = getattr(self, "_slow_range", "today")
+        t0, t1, label = self._slow_window(rng)
+        self._w(tr("למה המחשב היה איטי?", "Why was it slow?") + "\n", "h1")
+        self._w(tr("לפי ההיסטוריה שנשמרת במחשב", "From the history kept on this computer") + "\n", "sub")
+        for key, text in (("hour", tr("השעה האחרונה", "Last hour")), ("today", tr("היום", "Today")),
+                          ("yesterday", tr("אתמול", "Yesterday"))):
+            on = key == rng
+            self._button(text, lambda k=key: self.open_slow(k), color="#ffffff" if on else FG_SOFT,
+                         bg=ACTIVE if on else HOVER)
+        self._w("\n", "p")
+        try:
+            t, cpu, ram = self._slow_data(t0, t1)
+        except Exception:
+            log.debug("No CPU history", exc_info=True)
+            t = cpu = ram = []
+        if len(t) < 2:
+            self._callout("info", "ⓘ " + tr("אין עדיין היסטוריה לתקופה הזו", "No history for this period yet"),
+                          tr("ההיסטוריה נאספת רק כש-PulseDeck רץ עם רישום היסטוריה.",
+                             "History is collected only while PulseDeck runs with history logging on."))
+            return
+        episodes = find_episodes(t, cpu, ram)
+        self._slow_chart(t, cpu, episodes)
+        history = get_default_history()
+        lines = []
+        for ep in reversed(episodes[-8:]):
+            a = days_to_datetime(ep["start"]).timestamp() - 30
+            b = days_to_datetime(ep["end"]).timestamp() + 30
+            lines.append(describe(ep, history.who_was_busy(a, b, limit=3)))
+        if not episodes:
+            self._callout("ok", "ⓘ " + tr(f"לא היו רגעים איטיים {label}", f"No slow moments {label}"),
+                          tr("המעבד לא נשאר מעל 70% והזיכרון לא מעל 85% יותר מחצי דקה.",
+                             "CPU never stayed above 70% nor memory above 85% for more than half a minute."))
+        else:
+            n = len(episodes)
+            self._callout("warn", "⚠ " + tr(f"{n} רגעים איטיים {label}", f"{n} slow moment(s) {label}"),
+                          tr("החדשים קודם. השמות הם מי שעבד הכי קשה באותן דקות.",
+                             "Newest first. The names are who worked hardest during those minutes."))
+            for line in lines:
+                self._w("• " + line + "\n", "p")
+        self._w("\n", "p")
+        self._button("✳ " + tr("שאל את Claude למה", "Ask Claude why"),
+                     lambda: self.ask_claude({"slow_moments": lines, "period": label},
+                                             tr(f"למה המחשב היה איטי {label}? מה כדאי לעשות?",
+                                                f"Why was my computer slow {label}? What should I do?")),
+                     color=CLAUDE, bg="#2d211c")
+
+    def _slow_chart(self, t, cpu, episodes) -> None:
+        """CPU over the period, slow stretches shaded red."""
+        import numpy as np
+        w, h = 290, 70
+        cv = tk.Canvas(self.note, width=w, height=h, bg=BG, highlightthickness=0)
+        t0, t1 = float(t[0]), float(t[-1])
+        span = (t1 - t0) or 1e-9
+        for ep in episodes:
+            x0 = 2 + (ep["start"] - t0) / span * (w - 4)
+            x1 = max(x0 + 2, 2 + (ep["end"] - t0) / span * (w - 4))
+            cv.create_rectangle(x0, 2, x1, h - 4, fill=WARN_SOFT, outline="")
+        step = max(1, len(t) // (w - 4))
+        tt, cc = t[::step], np.nan_to_num(cpu[::step])
+        xs = 2 + (tt - t0) / span * (w - 4)
+        ys = h - 4 - cc / 100 * (h - 8)
+        pts = [c for xy in zip(xs.tolist(), ys.tolist()) for c in xy]
+        cv.create_line(2, h - 4, w - 2, h - 4, fill=LINE)
+        if len(pts) >= 4:
+            cv.create_line(*pts, fill=hex_of(RES_COLORS["cpu"]), width=1.2)
+        self._w(tr("מעבד לאורך התקופה (אדום = רגע איטי)\n", "CPU over the period (red = slow moment)\n"), "pk")
+        self.note.window_create("end", window=cv)
+        self._w("\n", "p")
