@@ -120,5 +120,45 @@ class PulseDeckIsNeverClosedTest(unittest.TestCase):
         terminate.assert_not_called()
 
 
+class ServerFoldersAreNeverClosedTest(unittest.TestCase):
+    """sweeper.server_cwds protects a folder from Clean all; the MCP server must
+    honour it too. Fake processes only."""
+
+    def test_listed_with_a_label_and_refused_by_close(self):
+        from types import SimpleNamespace
+        from unittest import mock
+        from ghost_sweeper import normalize_dirs
+        root = tempfile.mkdtemp()
+        server_dir = str(Path(root) / "muse-bridge")
+        p = mock.Mock()
+        p.info = {"pid": 5151, "name": "python.exe", "create_time": 1000.0,
+                  "memory_info": SimpleNamespace(rss=40 * 1024 ** 2),
+                  "cpu_times": SimpleNamespace(user=1.0, system=0.0)}
+        p.cwd.return_value = server_dir
+        p.cmdline.return_value = ["python.exe", "bridge.py"]
+        p.parent.return_value = None
+        with mock.patch.object(pulsedeck_mcp.psutil, "process_iter", return_value=[p]), \
+             mock.patch.object(pulsedeck_mcp, "_protected_pids", return_value=set()), \
+             mock.patch.object(pulsedeck_mcp, "_server_dirs", return_value=normalize_dirs([server_dir])), \
+             mock.patch("ghost_sweeper._connection_map", return_value=({}, {})), \
+             mock.patch.object(pulsedeck_mcp.psutil, "Process", return_value=p), \
+             mock.patch("alerts.terminate_process") as terminate:
+            self.assertIn("never closed", pulsedeck_mcp.tool_leftovers({"folder": root}))
+            with self.assertRaisesRegex(ValueError, "server_cwds"):
+                pulsedeck_mcp.tool_close({"pid": 5151, "folder": root})
+        terminate.assert_not_called()
+
+    def test_server_dirs_are_read_without_creating_config(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(pulsedeck_mcp, "PULSEDECK_DIR", Path(tmp)):
+                self.assertEqual(pulsedeck_mcp._server_dirs(), ())
+                self.assertFalse((Path(tmp) / "config.json").exists())
+                (Path(tmp) / "config.json").write_text(
+                    json.dumps({"sweeper": {"server_cwds": ["E:/Flow-Hub/SecurityGuard/"]}}),
+                    encoding="utf-8")
+                self.assertEqual(pulsedeck_mcp._server_dirs(), ("e:\\flow-hub\\securityguard",))
+
+
 if __name__ == "__main__":
     unittest.main()

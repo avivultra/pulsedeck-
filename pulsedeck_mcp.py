@@ -91,6 +91,21 @@ def _protected_pids() -> set[int]:
     return out
 
 
+def _server_dirs() -> tuple[str, ...]:
+    """The user's protected server folders (config `sweeper.server_cwds`).
+
+    Read straight from config.json: load_config() would create the file when it
+    is missing, and an MCP server has no business writing the user's config.
+    """
+    from ghost_sweeper import normalize_dirs
+    try:
+        with (PULSEDECK_DIR / "config.json").open(encoding="utf-8") as f:
+            cfg = json.load(f)
+        return normalize_dirs((cfg.get("sweeper") or {}).get("server_cwds") or [])
+    except (OSError, ValueError, AttributeError):
+        return ()
+
+
 # ------------------------------------------------------------------ tools
 
 def tool_status(_args: dict) -> str:
@@ -115,9 +130,10 @@ def tool_status(_args: dict) -> str:
 
 def leftovers(folder: str) -> list[dict]:
     """Processes whose working folder (or command line) is inside `folder`."""
-    from ghost_sweeper import _connection_map
+    from ghost_sweeper import _connection_map, protected_dir_of
     listening, established = _connection_map()
     protected = _protected_pids()
+    servers = _server_dirs()
     now = time.time()
     out = []
     for p in psutil.process_iter(["pid", "name", "create_time", "memory_info", "cpu_times"]):
@@ -150,6 +166,7 @@ def leftovers(folder: str) -> list[dict]:
             "cpu_seconds": round((ct.user + ct.system) if ct else 0.0, 1),
             "listening": sorted(listening.get(pid, ())), "connections": established.get(pid, 0),
             "parent": parent_name, "cwd": cwd,
+            "server": bool(protected_dir_of(cwd, cmd, servers)),
         })
     out.sort(key=lambda d: d["memory"], reverse=True)
     return out
@@ -170,6 +187,8 @@ def tool_leftovers(args: dict) -> str:
             bits.append("listening on " + ", ".join(map(str, d["listening"])))
         if d["connections"]:
             bits.append(f"{d['connections']} open connection(s) — in use")
+        if d["server"]:
+            bits.append("a server the user keeps running (sweeper.server_cwds) — never closed")
         lines.append("- " + ", ".join(bits) + f" (create_time {d['create_time']:.0f})")
     lines.append("To close one, call pulsedeck_close with its pid, create_time and this folder.")
     return "\n".join(lines)
@@ -226,6 +245,9 @@ def tool_close(args: dict) -> str:
         raise ValueError(f"pid {pid} is not running from {folder}; refusing to close it.")
     if match["name"].lower() in _NEVER_CLOSE:
         raise ValueError(f"{match['name']} is protected; close it yourself if you really mean to.")
+    if match["server"]:
+        raise ValueError(f"{match['name']} (pid {pid}) runs from a folder the user marked as a server "
+                         "(sweeper.server_cwds); it is never closed from here.")
     if match["connections"]:
         raise ValueError(f"{match['name']} (pid {pid}) has {match['connections']} open connection(s) and "
                          "is in use; not closing it.")
@@ -261,8 +283,8 @@ TOOLS = {
     "pulsedeck_close": (
         tool_close,
         "Close ONE process that runs from the given project folder (for example a dev server you "
-        "started and no longer need). Refuses system processes, editors/terminals, PulseDeck, and "
-        "anything with open connections. Pass create_time from pulsedeck_leftovers.",
+        "started and no longer need). Refuses system processes, editors/terminals, PulseDeck, servers "
+        "the user marked as kept running, and anything with open connections. Pass create_time from pulsedeck_leftovers.",
         {"type": "object", "properties": {"pid": {"type": "integer"}, "create_time": {"type": "number"},
                                           "folder": {"type": "string"}},
          "required": ["pid"], "additionalProperties": False}),
