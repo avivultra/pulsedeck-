@@ -38,4 +38,4 @@ jobs:
           pip install pytest
 
       - name: Run tests
-        run: pytest test_monitor.py -v
+        run: pytest -v
