@@ -1,5 +1,6 @@
-"""Background process sampler — uses psutil.process_iter batching for speed,
-maintains warm cache for cpu_percent priming, and tracks per-PID activity."""
+"""Background process sampler — one read of the whole process table per tick
+(win_processes on Windows, psutil.process_iter elsewhere), CPU % from the
+difference between ticks, and per-PID activity tracking."""
 from __future__ import annotations
 
 import logging
@@ -57,6 +58,16 @@ class ProcessSampler:
         # Optional per-program history (process_history.ProcessHistory); fed
         # from this thread after every tick, so it costs no extra scan.
         self.recorder = None
+        # Windows: the whole table in one system call (see win_processes for
+        # why psutil's per-process path cost ~0.7 s of CPU per tick).
+        self._native = None
+        self._cpu_prev: dict[int, tuple[float, float, float]] = {}   # pid -> (create, cpu s, t)
+        try:
+            import win_processes
+            if win_processes.AVAILABLE:
+                self._native = win_processes.Snapshotter()
+        except Exception:
+            log.warning("Native process table unavailable; using psutil", exc_info=True)
 
     def notify_activity(self) -> None:
         """Mark the sampler as 'active' (e.g. just after a spike or UI open).
@@ -97,36 +108,67 @@ class ProcessSampler:
             if self._stop.wait(self._current_refresh_seconds()):
                 break
 
+    def _native_rows(self):
+        """(pid, name, cpu_raw, rss, create_time) from one table read, or None
+        if the native read failed (then psutil is used from here on)."""
+        try:
+            entries = self._native.read()
+        except Exception:
+            log.warning("Native process table read failed; using psutil from now on", exc_info=True)
+            self._native = None
+            return None
+        t = time.monotonic()
+        prev, cur, rows = self._cpu_prev, {}, []
+        for pid, name, created, cpu_s, rss in entries:
+            cur[pid] = (created, cpu_s, t)
+            p = prev.get(pid)
+            if p is not None and abs(p[0] - created) > 0.5:
+                # Same pid, different process: start it over as a new one.
+                self._primed.discard(pid)
+                self._last_active.pop(pid, None)
+                p = None
+            cpu_raw = 0.0 if p is None or t <= p[2] else max(0.0, (cpu_s - p[1]) / (t - p[2]) * 100.0)
+            rows.append((pid, name, cpu_raw, rss, created))
+        self._cpu_prev = cur
+        return rows
+
+    def _psutil_rows(self):
+        attrs = ["pid", "name", "cpu_percent", "memory_info", "create_time"]
+        for proc in psutil.process_iter(attrs):
+            try:
+                info = proc.info
+                mem = info.get("memory_info")
+                yield (int(info.get("pid") or 0), info.get("name") or "?",
+                       float(info.get("cpu_percent") or 0.0),
+                       int(getattr(mem, "rss", 0)) if mem is not None else None,
+                       info.get("create_time"))
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+
     def _tick(self) -> None:
         now = time.time()
         live: list[ProcessInfo] = []
         seen: set[int] = set()
 
-        attrs = ["pid", "name", "cpu_percent", "memory_info", "create_time"]
-        for proc in psutil.process_iter(attrs):
+        rows = self._native_rows() if self._native is not None else None
+        for pid, name, cpu_raw, rss, created in (rows if rows is not None else self._psutil_rows()):
             try:
-                info = proc.info
-                pid = int(info.get("pid") or 0)
                 if pid <= 0:
                     continue
                 seen.add(pid)
 
-                # First sighting: process_iter primed cpu_percent internally,
-                # but the very first reading is always 0. Skip until next tick.
+                # First sighting: the first CPU reading has nothing to be
+                # compared with (always 0). Skip until the next tick.
                 if pid not in self._primed:
                     self._primed.add(pid)
                     self._first_seen[pid] = now
-                    ct = info.get("create_time")
-                    if ct is not None:
-                        self._create_time[pid] = float(ct)
+                    if created is not None:
+                        self._create_time[pid] = float(created)
                     continue
 
-                cpu_raw = float(info.get("cpu_percent") or 0.0)
-                mem = info.get("memory_info")
-                if mem is None:
+                if rss is None:
                     continue
-                rss = int(getattr(mem, "rss", 0))
-                name = (info.get("name") or "?")[:64]
+                name = name[:64]
 
                 # Activity tracking
                 if cpu_raw >= self.ACTIVE_CPU_THRESHOLD:
@@ -136,7 +178,7 @@ class ProcessSampler:
 
                 ct = self._create_time.get(pid)
                 if ct is None:
-                    ct = float(info.get("create_time") or now)
+                    ct = float(created or now)
                     self._create_time[pid] = ct
                 uptime = max(0.0, now - ct)
 

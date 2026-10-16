@@ -381,6 +381,7 @@ monitor.py            ← entry point; sets up logging, config, dispatchers
 ├── self_usage.py     ← PulseDeck's own CPU / memory, shown in the UI
 │
 ├── process_monitor.py ← background sampler; per-PID activity & RSS
+├── win_processes.py  ← Windows: the whole process table in one system call
 ├── spike_reporter.py  ← spike detection + per-day markdown log
 ├── alerts.py          ← AlertEvent, dispatcher (cooldown/snooze/mute),
 │                        toast, full alert window, safe try_terminate
@@ -453,7 +454,7 @@ Typical footprint: **~90 MB RAM, ~1 % CPU** (measured on an 8-thread laptop).
 pytest
 ```
 
-230 unit tests across `test_monitor.py`, `test_ghost_sweeper.py`,
+243 unit tests across `test_monitor.py`, `test_ghost_sweeper.py`,
 `test_i18n.py`, `test_hardware.py`, `test_pulsedeck_mcp.py` (MCP protocol,
 the command line, UTF-8 pipes, and the never-close rules — fake processes
 apart from one sleep process the test starts and closes itself), the
