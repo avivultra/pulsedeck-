@@ -76,5 +76,49 @@ class LeftoversTest(unittest.TestCase):
         self.assertNotIn(pulsedeck_mcp.os.getpid(), pids)
 
 
+class PulseDeckIsNeverClosedTest(unittest.TestCase):
+    """PulseDeck runs from its own folder, so it is a 'leftover' of that folder
+    unless recognised. Fake processes only — nothing real is listed or closed."""
+
+    HOME = str(pulsedeck_mcp.PULSEDECK_DIR)
+
+    def _cmd(self, script):
+        return f'"C:\\Py\\pythonw.exe" "{self.HOME}\\{script}" --dock --history --tray'
+
+    def test_recognises_its_own_entry_points(self):
+        self.assertTrue(pulsedeck_mcp.is_pulsedeck(self._cmd("monitor.py")))
+        self.assertTrue(pulsedeck_mcp.is_pulsedeck(self._cmd("tray_runner.py").upper()))
+        self.assertTrue(pulsedeck_mcp.is_pulsedeck(self._cmd("monitor.py").replace("\\", "/")))
+        self.assertFalse(pulsedeck_mcp.is_pulsedeck(self._cmd("vite_server.py")))
+        self.assertFalse(pulsedeck_mcp.is_pulsedeck('python "C:\\other\\monitor.py"'))
+        self.assertFalse(pulsedeck_mcp.is_pulsedeck(""))
+
+    def _fake(self, pid, cmd):
+        from types import SimpleNamespace
+        from unittest import mock
+        p = mock.Mock()
+        p.info = {"pid": pid, "name": "pythonw.exe", "create_time": 1000.0,
+                  "memory_info": SimpleNamespace(rss=80 * 1024 ** 2),
+                  "cpu_times": SimpleNamespace(user=1.0, system=0.5)}
+        p.cwd.return_value = self.HOME
+        p.cmdline.return_value = cmd.split(" ")
+        p.parent.return_value = None
+        return p
+
+    def test_not_listed_as_a_leftover_and_refused_by_close(self):
+        from unittest import mock
+        pulsedeck = self._fake(4242, self._cmd("monitor.py"))
+        dev = self._fake(4343, f'python "{self.HOME}\\dev_server.py"')
+        with mock.patch.object(pulsedeck_mcp.psutil, "process_iter", return_value=[pulsedeck, dev]), \
+             mock.patch.object(pulsedeck_mcp, "_protected_pids", return_value=set()), \
+             mock.patch("ghost_sweeper._connection_map", return_value=({}, {})), \
+             mock.patch.object(pulsedeck_mcp.psutil, "Process", return_value=pulsedeck), \
+             mock.patch("alerts.terminate_process") as terminate:
+            self.assertEqual([d["pid"] for d in pulsedeck_mcp.leftovers(self.HOME)], [4343])
+            with self.assertRaisesRegex(ValueError, "PulseDeck"):
+                pulsedeck_mcp.tool_close({"pid": 4242, "folder": self.HOME})
+        terminate.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

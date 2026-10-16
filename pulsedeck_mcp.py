@@ -30,7 +30,8 @@ from pathlib import Path
 
 import psutil
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+PULSEDECK_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(PULSEDECK_DIR))
 
 SERVER_INFO = {"name": "pulsedeck", "version": "1.0"}
 SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
@@ -57,8 +58,30 @@ def _under(path: str, folder: str) -> bool:
     return p == f or p.startswith(f + os.sep)
 
 
+# PulseDeck's own entry points; a process running one of them IS PulseDeck.
+_PULSEDECK_SCRIPTS = ("monitor.py", "tray_runner.py", "pulsedeck_mcp.py")
+
+
+def is_pulsedeck(cmdline: str) -> bool:
+    """The command line runs one of PulseDeck's own scripts from its folder."""
+    text = (cmdline or "").replace("/", "\\").lower()
+    home = str(PULSEDECK_DIR).replace("/", "\\").rstrip("\\").lower()
+    return any(f"{home}\\{script}" in text for script in _PULSEDECK_SCRIPTS)
+
+
+def _cmdline(p: psutil.Process) -> str | None:
+    try:
+        return " ".join(p.cmdline())
+    except (psutil.Error, OSError):
+        return None
+
+
 def _protected_pids() -> set[int]:
-    """This server, its ancestors (the agent, its terminal) and PulseDeck."""
+    """This server and its ancestors (the agent, its terminal).
+
+    PulseDeck itself is recognised by its command line (is_pulsedeck), not by
+    pid: it is not an ancestor of this server.
+    """
     out = {os.getpid()}
     try:
         for parent in psutil.Process().parents():
@@ -106,14 +129,14 @@ def leftovers(folder: str) -> list[dict]:
             cwd = p.cwd()
         except (psutil.Error, OSError):
             cwd = ""
-        cmd = ""
-        if not _under(cwd, folder):
-            try:
-                cmd = " ".join(p.cmdline())
-            except (psutil.Error, OSError):
-                continue
-            if _norm(folder) not in os.path.normcase(cmd):
-                continue
+        cmd = _cmdline(p)
+        if cmd is None and not _under(cwd, folder):
+            continue
+        cmd = cmd or ""
+        if not _under(cwd, folder) and _norm(folder) not in os.path.normcase(cmd):
+            continue
+        if is_pulsedeck(cmd):
+            continue
         try:
             parent = p.parent()
             parent_name = parent.name() if parent else "?"
@@ -193,6 +216,11 @@ def tool_close(args: dict) -> str:
     from alerts import terminate_process
     pid, folder = int(args["pid"]), args.get("folder") or os.getcwd()
     create_time = float(args["create_time"]) if args.get("create_time") is not None else None
+    try:
+        if is_pulsedeck(_cmdline(psutil.Process(pid)) or ""):
+            raise ValueError("That is PulseDeck itself; it is never closed from here.")
+    except psutil.Error:
+        pass
     match = next((d for d in leftovers(folder) if d["pid"] == pid), None)
     if match is None:
         raise ValueError(f"pid {pid} is not running from {folder}; refusing to close it.")
