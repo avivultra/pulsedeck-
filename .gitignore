@@ -24,6 +24,9 @@ history/spike_reports.md
 # User-specific config (publish config.example.json instead)
 config.json
 
+# Secrets (publish .env.example instead)
+.env
+
 # Windows shortcuts and OS junk
 *.lnk
 Thumbs.db

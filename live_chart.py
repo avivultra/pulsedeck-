@@ -690,6 +690,24 @@ def open_live_chart(history_dir: Path, parent: tk.Misc | None = None,
     dot_item = dot.create_oval(1, 1, 13, 13, fill=GREEN, outline="")
     dot.pack(side=side, padx=(0, 10) if side == "left" else (10, 0))
     verdict_var = tk.StringVar(value=tr("בודק…", "Checking…"))
+
+    def _claude_snapshot() -> dict:
+        from ai_advisor import build_snapshot
+        s = _sampler()
+        return build_snapshot(collect_snapshot(disk_path), _group_by_name(s.snapshot()) if s else [],
+                              state["events"], gpu_temp=read_gpu_temp_celsius())
+
+    def _ask_claude(_e=None) -> None:
+        try:
+            from claude_panel import open_claude_panel
+            open_claude_panel(win, _claude_snapshot)
+        except Exception:
+            log.exception("Could not open the Ask Claude panel")
+
+    ask_btn = _label(header, tr("✳ שאל את Claude", "✳ Ask Claude"), fg="#d97757", size=10,
+                     bold=True, bg=PANEL2, padx=10, pady=3, cursor="hand2")
+    ask_btn.pack(side=side_end)
+    ask_btn.bind("<Button-1>", _ask_claude)
     _label(header, textvariable=verdict_var, size=14, bold=True, anchor=anchor).pack(
         side=side, fill="x", expand=True)
     tk.Frame(win, bg=GRID, height=1).pack(fill="x")
