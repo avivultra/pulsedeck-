@@ -92,6 +92,71 @@ class LeftoversTest(unittest.TestCase):
         self.assertNotIn(pulsedeck_mcp.os.getpid(), pids)
 
 
+class CommandLineTest(unittest.TestCase):
+    """`python pulsedeck_mcp.py <command>` — the same tools without MCP. Nothing
+    is closed: close is only exercised on a pid that is not in the folder."""
+
+    def _run(self, *args):
+        import os
+        env = {k: v for k, v in os.environ.items() if k not in ("PYTHONIOENCODING", "PYTHONUTF8")}
+        out = subprocess.run([sys.executable, str(HERE / "pulsedeck_mcp.py"), *args],
+                             capture_output=True, timeout=60, cwd=HERE, env=env)
+        return out.returncode, out.stdout.decode("utf-8"), out.stderr.decode("utf-8")
+
+    def test_each_command_reaches_its_tool_with_its_arguments(self):
+        from unittest import mock
+        seen = {}
+
+        def fake(name):
+            def tool(args):
+                seen[name] = args
+                return f"{name} ok"
+            return tool
+
+        fakes = {cmd: (fake(cmd), names, req) for cmd, (_f, names, req) in pulsedeck_mcp.COMMANDS.items()}
+        with mock.patch.dict(pulsedeck_mcp.COMMANDS, fakes), mock.patch("builtins.print"):
+            self.assertEqual(pulsedeck_mcp.cli(["status"]), 0)
+            self.assertEqual(pulsedeck_mcp.cli(["leftovers"]), 0)
+            self.assertEqual(pulsedeck_mcp.cli(["leftovers", "E:\\proj"]), 0)
+            self.assertEqual(pulsedeck_mcp.cli(["port", "8080"]), 0)
+            self.assertEqual(pulsedeck_mcp.cli(["slow-at", "14:30"]), 0)
+            self.assertEqual(pulsedeck_mcp.cli(["close", "12", "1000.5", "E:\\proj"]), 0)
+        self.assertEqual(seen["status"], {})
+        self.assertEqual(seen["leftovers"], {"folder": "E:\\proj"})
+        self.assertEqual(seen["port"], {"port": "8080"})
+        self.assertEqual(seen["slow-at"], {"time": "14:30"})
+        self.assertEqual(seen["close"], {"pid": "12", "create_time": "1000.5", "folder": "E:\\proj"})
+
+    def test_wrong_usage_is_an_error(self):
+        from unittest import mock
+        with mock.patch("builtins.print"):
+            self.assertEqual(pulsedeck_mcp.cli(["nope"]), 1)
+            self.assertEqual(pulsedeck_mcp.cli(["port"]), 1)
+            self.assertEqual(pulsedeck_mcp.cli(["port", "1", "2"]), 1)
+            # close needs pid, create_time AND folder — no guessing the folder.
+            self.assertEqual(pulsedeck_mcp.cli(["close", "12"]), 1)
+            self.assertEqual(pulsedeck_mcp.cli(["--help"]), 0)
+
+    def test_leftovers_and_port_over_a_real_pipe(self):
+        folder = tempfile.mkdtemp(prefix="גרף ביצועים ")
+        code, out, _err = self._run("leftovers", folder)
+        self.assertEqual(code, 0)
+        self.assertIn(f"Nothing is running from {folder}", out)
+        code, out, _err = self._run("port", "1")
+        self.assertEqual((code, out.strip()), (0, "Nothing is listening on port 1."))
+
+    def test_tool_errors_exit_1_with_the_message_on_stderr(self):
+        code, out, err = self._run("leftovers", "/definitely/not/here")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("Not a folder", err)
+        code, _out, err = self._run("close", "999999", "1.0", tempfile.mkdtemp())
+        self.assertEqual(code, 1)
+        self.assertIn("refusing to close", err)
+        code, _out, err = self._run("port", "eighty")
+        self.assertEqual(code, 1)
+        self.assertIn("Error", err)
+
+
 class PulseDeckIsNeverClosedTest(unittest.TestCase):
     """PulseDeck runs from its own folder, so it is a 'leftover' of that folder
     unless recognised. Fake processes only — nothing real is listed or closed."""

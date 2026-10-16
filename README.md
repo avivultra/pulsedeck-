@@ -221,10 +221,35 @@ look are all welcome as pull requests.
   works even when the whole interpreter is stuck). Empty apart from one
   start-up line per session means no freezes
 
-### Use with Claude Code (MCP)
-`pulsedeck_mcp.py` lets Claude Code ask PulseDeck what is running and clean up
-after itself. It starts only while an agent is connected (stdio, no service)
-and needs no extra package. Register it once for all projects:
+### Use with Claude Code
+`pulsedeck_mcp.py` lets Claude Code ask PulseDeck what is running, what a
+project left behind, who holds a port and who slowed the PC down. Two ways to
+use it; both need no extra package and leave nothing running afterwards.
+
+**On demand — the `/pulsedeck` skill (recommended).** Nothing loads into a
+session until you type the command. The script also works as a plain
+command line:
+
+```
+python pulsedeck_mcp.py status
+python pulsedeck_mcp.py leftovers [folder]        # default: the current folder
+python pulsedeck_mcp.py port <N>
+python pulsedeck_mcp.py slow-at <HH:MM | YYYY-MM-DDTHH:MM>
+python pulsedeck_mcp.py close <pid> <create_time> <folder>
+```
+
+Each command prints its answer and exits with code 1 on an error (message on
+stderr). To install the skill, copy `claude/skills/pulsedeck/` to
+`~/.claude/skills/pulsedeck/` and replace `<PULSEDECK_DIR>` in `SKILL.md` with
+the folder PulseDeck lives in. Then, in any Claude Code session:
+`/pulsedeck status`, `/pulsedeck leftovers`, `/pulsedeck port 8080`,
+`/pulsedeck slow-at 14:30`. The skill summarises the answer and asks you
+before every close, naming the process; it never closes system processes,
+PulseDeck, editors or terminals.
+
+**Always on — as an MCP server.** Run without arguments, the same script is
+an MCP server over stdio, started only while an agent is connected. Register
+it for all projects with:
 
 ```
 claude mcp add --scope user pulsedeck -- python "C:\path\to\pulsedeck_mcp.py"
@@ -233,9 +258,12 @@ claude mcp add --scope user pulsedeck -- python "C:\path\to\pulsedeck_mcp.py"
 Tools: `pulsedeck_status`, `pulsedeck_leftovers` (processes running from the
 project folder, with ports, connections, memory, age), `pulsedeck_port`,
 `pulsedeck_slow_at` (who was busy at a past time, from the per-program
-history) and `pulsedeck_close` (one process from that folder; refuses system
-processes, editors, terminals and anything with open connections, and Claude
-Code asks you before every call).
+history) and `pulsedeck_close` (one process from that folder, and Claude Code
+asks you before every call).
+
+Both ways refuse to close system processes, editors, terminals, PulseDeck
+itself, anything with open connections and anything under a folder listed in
+`sweeper.server_cwds`.
 
 ---
 
@@ -346,7 +374,8 @@ monitor.py            ← entry point; sets up logging, config, dispatchers
 ├── live_chart.py     ← history data layer, spike parsing, alerts panel
 ├── process_history.py ← per-program history (SQLite, 30 s roll-ups)
 ├── slowdown.py       ← finds slow moments and names who was behind them
-├── pulsedeck_mcp.py  ← MCP server for Claude Code (stdio, no dependency)
+├── pulsedeck_mcp.py  ← Claude Code helper: MCP server (stdio) or command line
+├── claude/skills/pulsedeck/SKILL.md ← the /pulsedeck skill (on demand)
 ├── ai_advisor.py     ← Ask Claude: snapshot + Messages API call
 ├── claude_panel.py   ← the Ask Claude window
 ├── self_usage.py     ← PulseDeck's own CPU / memory, shown in the UI
@@ -424,8 +453,11 @@ Typical footprint: **~90 MB RAM, ~1 % CPU** (measured on an 8-thread laptop).
 pytest
 ```
 
-174 unit tests across `test_monitor.py`, `test_ghost_sweeper.py`,
-`test_i18n.py`, `test_hardware.py`, `test_server_guard.py` (protected
+230 unit tests across `test_monitor.py`, `test_ghost_sweeper.py`,
+`test_i18n.py`, `test_hardware.py`, `test_pulsedeck_mcp.py` (MCP protocol,
+the command line, UTF-8 pipes, and the never-close rules — fake processes
+apart from one sleep process the test starts and closes itself), the
+window and history tests, `test_server_guard.py` (protected
 folders, app parts, conversation titles — all on fake processes) and
 `test_idle_cleanup.py` (clean-all never offers or closes anything active,
 terminate outcomes, the freeze log, the WMI give-up).

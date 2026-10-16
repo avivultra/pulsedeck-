@@ -17,6 +17,10 @@ Tools:
 
 Register with Claude Code (from the project folder you work in):
     claude mcp add pulsedeck -- python C:\\path\\to\\pulsedeck_mcp.py
+
+Or use it without MCP, one command at a time (what the /pulsedeck skill does):
+    python pulsedeck_mcp.py status | leftovers [folder] | port N | slow-at HH:MM
+    python pulsedeck_mcp.py close <pid> <create_time> <folder>
 """
 
 from __future__ import annotations
@@ -339,8 +343,48 @@ def _utf8_stdio() -> None:
             pass
 
 
+# ------------------------------------------------------------------ command line
+
+USAGE = """usage:
+  python pulsedeck_mcp.py                      run as an MCP server on stdio
+  python pulsedeck_mcp.py status
+  python pulsedeck_mcp.py leftovers [folder]   default: the current folder
+  python pulsedeck_mcp.py port <N>
+  python pulsedeck_mcp.py slow-at <HH:MM | YYYY-MM-DDTHH:MM>
+  python pulsedeck_mcp.py close <pid> <create_time> <folder>"""
+
+# command -> (tool, names of the positional arguments, how many are required)
+COMMANDS = {
+    "status": (tool_status, (), 0),
+    "leftovers": (tool_leftovers, ("folder",), 0),
+    "port": (tool_port, ("port",), 1),
+    "slow-at": (tool_slow_at, ("time",), 1),
+    "close": (tool_close, ("pid", "create_time", "folder"), 3),
+}
+
+
+def cli(argv: list[str]) -> int:
+    """One command, same tool_* functions as the MCP server. 0 = ok, 1 = error."""
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(USAGE)
+        return 0 if argv else 1
+    entry = COMMANDS.get(argv[0])
+    if entry is None or not entry[2] <= len(argv) - 1 <= len(entry[1]):
+        print(USAGE, file=sys.stderr)
+        return 1
+    tool, names, _required = entry
+    try:
+        print(tool(dict(zip(names, argv[1:]))))
+    except Exception as e:              # same contract as the MCP server: errors are text
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main() -> None:
     _utf8_stdio()
+    if len(sys.argv) > 1:
+        sys.exit(cli(sys.argv[1:]))
     for line in sys.stdin:
         line = line.strip()
         if not line:
