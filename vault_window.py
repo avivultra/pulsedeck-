@@ -146,6 +146,8 @@ class VaultWindow:
         self._snap = None
         self._animating = False
         self._fitted = False
+        self._lines: list[int] = []          # reusable line items, one per visible link
+        self._drawn: dict[int, dict] = {}    # canvas item -> what was last sent to Tk
 
         self._build_ui()
         self.win.bind("<F11>", lambda _e: self.toggle_full())
@@ -458,21 +460,53 @@ class VaultWindow:
                 out.add(link.a)
         return out
 
+    def _cfg(self, item: int, **cfg) -> None:
+        """itemconfigure only the options that changed since the last frame:
+        every call costs a Tk round trip, and text items are re-laid-out."""
+        last = self._drawn.setdefault(item, {})
+        diff = {k: v for k, v in cfg.items() if last.get(k) is not v and last.get(k) != v}
+        if diff:
+            self.canvas.itemconfigure(item, **diff)
+            last.update(diff)
+
+    def _move(self, item: int, *xy: float) -> None:
+        """coords only when the item moved at least half a pixel. Tk repaints the
+        area of every moved item, and the alpha-blended bubbles are the costly part."""
+        last = self._drawn.setdefault(item, {})
+        old = last.get("xy")
+        if old is None or max(abs(p - q) for p, q in zip(old, xy)) >= 0.5:
+            self.canvas.coords(item, *xy)
+            last["xy"] = xy
+
+    def _forget(self, item: int) -> None:
+        self.canvas.delete(item)
+        self._drawn.pop(item, None)
+
     def render(self) -> None:
         c = self.canvas
         if c.winfo_width() < 20:
             return
-        k = self.view["k"]
+        w, h = self._size()
+        v = self.view
+        k, ox, oy = v["k"], w / 2 + v["x"], h / 2 + v["y"]
         focus = self.hover or self.selected
         if focus not in self.layout.nodes:     # e.g. the "why was it slow?" page
             focus = None
         near = self._neighbors(focus) if focus else None
-        c.delete("link")
         nodes = self.layout.nodes
-        for link in self.layout.visible_links():
+        links = self.layout.visible_links()
+        # Line items are reused frame to frame (moved, restyled only on change)
+        # instead of being deleted and re-created 30 times a second.
+        lines = self._lines
+        while len(lines) < len(links):
+            lines.append(c.create_line(0, 0, 0, 0, tags="link"))
+            c.tag_lower(lines[-1])
+        while len(lines) > len(links):
+            self._forget(lines.pop())
+        for item, link in zip(lines, links):
             a, b = nodes[link.a], nodes[link.b]
-            x1, y1 = self.to_screen(a.x, a.y)
-            x2, y2 = self.to_screen(b.x, b.y)
+            x1, y1 = ox + a.x * k, oy + a.y * k
+            x2, y2 = ox + b.x * k, oy + b.y * k
             on = near is not None and focus in (link.a, link.b)
             if link.type == "res":
                 rgb = RES_COLORS.get(b.data.get("id", ""), (120, 120, 120))
@@ -485,14 +519,14 @@ class VaultWindow:
                 rgb, alpha, width = (90, 90, 90), 0.6, 1
             if near is not None:
                 alpha = 0.95 if on else 0.07
-            c.create_line(x1, y1, x2, y2, fill=blend(rgb, alpha), width=max(1, width * k ** 0.5),
-                          dash=(4, 4) if link.type in ("event", "ghost") else (), tags="link")
-        c.tag_lower("link")
+            self._move(item, x1, y1, x2, y2)
+            self._cfg(item, fill=blend(rgb, alpha), width=max(1, width * k ** 0.5),
+                      dash=(4, 4) if link.type in ("event", "ghost") else ())
 
         seen = set()
         for n in self.layout.visible_nodes():
             seen.add(n.key)
-            x, y = self.to_screen(n.x, n.y)
+            x, y = ox + n.x * k, oy + n.y * k
             dim = near is not None and n.key not in near
             is_focus = n.key == focus
             kw = {"dim": dim, "focus": is_focus}
@@ -505,44 +539,43 @@ class VaultWindow:
             it = self.items.get(n.key)
             if it is None:
                 it = self.items[n.key] = {
-                    "img": c.create_image(x, y, image=img, tags=("node",)),
+                    "img": c.create_image(x, y, tags=("node",)),
                     "label": c.create_text(x, y, text="", fill=FG_SOFT, font=(FONT, 9), anchor="n",
                                            tags=("node",)),
                     "value": c.create_text(x, y, text="", fill=FG, font=(FONT, 8, "bold"), tags=("node",)),
                 }
-            else:
-                c.coords(it["img"], x, y)
-                c.itemconfigure(it["img"], image=img, state="normal")
+            self._move(it["img"], x, y)
+            self._cfg(it["img"], image=img, state="normal")
             it["photo"] = img        # keep a reference for Tk
             # value inside resource hexagons, ghost icon
             if n.kind == "res":
                 col = hex_of(RES_COLORS.get(n.data["id"], (200, 200, 200)))
-                c.itemconfigure(it["value"], text=n.data["text"], state="normal",
-                                fill=blend(tuple(int(col[i:i + 2], 16) for i in (1, 3, 5)), 0.22 if dim else 1),
-                                font=(FONT, max(7, int(9 * min(1.4, k))), "bold"))
-                c.coords(it["value"], x, y)
+                self._cfg(it["value"], text=n.data["text"], state="normal",
+                          fill=blend(tuple(int(col[i:i + 2], 16) for i in (1, 3, 5)), 0.22 if dim else 1),
+                          font=(FONT, max(7, int(9 * min(1.4, k))), "bold"))
+                self._move(it["value"], x, y)
             elif n.kind == "ghost":
-                c.itemconfigure(it["value"], text="👻", state="normal", font=(FONT, max(7, int(n.r * k * 0.8))))
-                c.coords(it["value"], x, y)
+                self._cfg(it["value"], text="👻", state="normal", font=(FONT, max(7, int(n.r * k * 0.8))))
+                self._move(it["value"], x, y)
             else:
-                c.itemconfigure(it["value"], state="hidden")
+                self._cfg(it["value"], state="hidden")
             show_label = (n.kind == "res" or n.r >= 20 or k > 1.15 or is_focus or (near and n.key in near)
                           or n.kind in ("event", "claude"))
             if show_label and n.label:
                 extra = pad_of(n) - n.r
-                c.coords(it["label"], x, y + (n.r + extra) * k + 4)
+                self._move(it["label"], x, y + (n.r + extra) * k + 4)
                 fill = "#ffffff" if is_focus else ("#ff8a8a" if n.kind == "event" else FG_SOFT)
-                c.itemconfigure(it["label"], text=n.label, state="normal",
-                                fill=blend((0x6f, 0x6f, 0x6f), 0.4) if dim else fill,
-                                font=(FONT, max(8, int(9 * min(1.3, k))), "bold" if n.kind == "res" else "normal"))
+                self._cfg(it["label"], text=n.label, state="normal",
+                          fill=blend((0x6f, 0x6f, 0x6f), 0.4) if dim else fill,
+                          font=(FONT, max(8, int(9 * min(1.3, k))), "bold" if n.kind == "res" else "normal"))
             else:
-                c.itemconfigure(it["label"], state="hidden")
+                self._cfg(it["label"], state="hidden")
         for key in [k_ for k_ in self.items if k_ not in seen]:
             for item in ("img", "label", "value"):
                 if key not in self.layout.nodes:
-                    c.delete(self.items[key][item])
+                    self._forget(self.items[key][item])
                 else:
-                    c.itemconfigure(self.items[key][item], state="hidden")
+                    self._cfg(self.items[key][item], state="hidden")
             if key not in self.layout.nodes:
                 del self.items[key]
         c.tag_raise("tip")
@@ -560,10 +593,14 @@ class VaultWindow:
             self._animating = False
             self.render()
             return
+        started = time.perf_counter()
         self.layout.step()
         self.layout.step()
         self.render()
-        self.win.after(FRAME_MS, self._animate)
+        # Keep a steady frame rate: the next frame is due FRAME_MS after this
+        # one started, not FRAME_MS after it finished.
+        spent = int((time.perf_counter() - started) * 1000)
+        self.win.after(max(1, FRAME_MS - spent), self._animate)
 
     def shake(self) -> None:
         import random

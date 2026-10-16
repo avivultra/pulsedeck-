@@ -137,5 +137,47 @@ class SpritesTest(unittest.TestCase):
             self.assertGreater(img.getpixel((cx, cx))[3], 0, kind)      # centre painted
 
 
+class RenderSendsOnlyChangesTest(unittest.TestCase):
+    """The window repaints 30 times a second while the graph moves; every Tk
+    call it can skip is CPU saved. A fake canvas counts the calls (no window)."""
+
+    def _window(self):
+        from unittest import mock
+        import vault_window
+        w = vault_window.VaultWindow.__new__(vault_window.VaultWindow)
+        w.canvas = mock.Mock()
+        w._drawn = {}
+        return w
+
+    def test_moves_below_half_a_pixel_are_not_sent(self):
+        w = self._window()
+        w._move(7, 100.0, 50.0)
+        w._move(7, 100.3, 50.2)
+        w._move(7, 100.6, 50.0)
+        self.assertEqual([c.args for c in w.canvas.coords.call_args_list],
+                         [(7, 100.0, 50.0), (7, 100.6, 50.0)])
+
+    def test_only_changed_options_are_sent(self):
+        w = self._window()
+        w._cfg(7, text="chrome", fill="#aaa", state="normal")
+        w._cfg(7, text="chrome", fill="#aaa", state="normal")
+        w._cfg(7, text="chrome", fill="#fff", state="normal")
+        self.assertEqual([c.kwargs for c in w.canvas.itemconfigure.call_args_list],
+                         [{"text": "chrome", "fill": "#aaa", "state": "normal"}, {"fill": "#fff"}])
+
+    def test_a_reheat_settles_in_seconds_not_tens_of_seconds(self):
+        # 2 steps a frame at 30 fps = 60 steps a second.
+        layout = Layout()
+        nodes, links = build_graph([ProgramGroup("a", 0, GB, 1)], [], [], [])
+        layout.update(nodes, links)
+        layout.settle(5000)
+        layout.heat(0.3)
+        steps = 0
+        while not layout.asleep:
+            layout.step()
+            steps += 1
+        self.assertLess(steps / 60, 6.0)
+
+
 if __name__ == "__main__":
     unittest.main()

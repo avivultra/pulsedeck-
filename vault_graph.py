@@ -194,6 +194,9 @@ def build_graph(programs: list[ProgramGroup], resources: list[dict], ghosts: lis
 
 REST = {"core": 150, "res": 190, "tree": 110, "ghost": 80, "event": 70}
 SLEEP_BELOW = 0.003
+# Per step. 0.985 settles a reheat in ~4 s of animation; the old 0.992 crept
+# for ~20 s, and the graph changes more often than that, so it never rested.
+ALPHA_DECAY = 0.985
 
 
 def pad_of(n: Node) -> float:
@@ -327,7 +330,7 @@ class Layout:
         if pc is not None and not pc.pinned:
             pc.x *= 0.9
             pc.y *= 0.9
-        self.alpha = max(0.0, self.alpha * 0.992 - 0.0004)
+        self.alpha = max(0.0, self.alpha * ALPHA_DECAY - 0.0004)
 
     def settle(self, steps: int = 600) -> None:
         for _ in range(steps):
