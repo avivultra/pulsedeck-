@@ -20,6 +20,9 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
+import time
+from datetime import date
 from pathlib import Path
 
 from i18n import tr
@@ -29,7 +32,16 @@ log = logging.getLogger(__name__)
 PROJECT_DIR = Path(__file__).resolve().parent
 ENV_PATH = PROJECT_DIR / ".env"
 DEFAULT_MODEL = "claude-opus-5-5"
-_MAX_TOKENS = 4000
+# ---- Spending limits. One button press = at most one request; these make
+# sure nothing (a stuck button, a bug, a loop) can burn tokens without end.
+_MAX_TOKENS = 2000              # per answer, thinking included (answers are short)
+TIMEOUT_SEC = 60                # a request that hangs is abandoned, not retried
+MIN_GAP_SEC = 5                 # at least this long between two requests
+MAX_QUESTION_CHARS = 500
+MAX_SNAPSHOT_CHARS = 8000
+DEFAULT_DAILY_REQUESTS = 20     # override: PULSEDECK_CLAUDE_DAILY_REQUESTS
+DEFAULT_DAILY_TOKENS = 60_000   # override: PULSEDECK_CLAUDE_DAILY_TOKENS
+USAGE_PATH = PROJECT_DIR / "history" / "claude_usage.json"
 
 _SYSTEM_PROMPT = """\
 You are the assistant inside PulseDeck, a small performance monitor on a \
@@ -95,6 +107,102 @@ def model_name() -> str:
     return os.environ.get("PULSEDECK_CLAUDE_MODEL", "").strip() or DEFAULT_MODEL
 
 
+# ---------------------------------------------------------------- budget
+
+class Budget:
+    """Daily caps on requests and tokens, kept in history/claude_usage.json.
+
+    A request is counted *before* it is sent, so even requests that fail or
+    hang use up the allowance: a bug that retries in a loop stops at the cap.
+    """
+
+    def __init__(self, path: Path | None = None, now=time.time) -> None:
+        self.path = Path(path or USAGE_PATH)
+        self.now = now
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _limit(name: str, default: int) -> int:
+        load_env()
+        try:
+            return max(0, int(os.environ.get(name, default)))
+        except ValueError:
+            return default
+
+    @property
+    def max_requests(self) -> int:
+        return self._limit("PULSEDECK_CLAUDE_DAILY_REQUESTS", DEFAULT_DAILY_REQUESTS)
+
+    @property
+    def max_tokens(self) -> int:
+        return self._limit("PULSEDECK_CLAUDE_DAILY_TOKENS", DEFAULT_DAILY_TOKENS)
+
+    def _load(self) -> dict:
+        today = date.fromtimestamp(self.now()).isoformat()
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        if data.get("day") != today:
+            data = {"day": today, "requests": 0, "tokens": 0, "last": data.get("last", 0.0)}
+        return data
+
+    def _save(self, data: dict) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(json.dumps(data), encoding="utf-8")
+        except OSError:
+            log.exception("Could not save Claude usage to %s", self.path)
+
+    def reserve(self) -> None:
+        """Check every limit and count one request, or raise AdvisorError."""
+        with self._lock:
+            data = self._load()
+            wait = MIN_GAP_SEC - (self.now() - float(data.get("last", 0.0)))
+            if wait > 0:
+                raise AdvisorError(tr(f"רגע — אפשר לשאול שוב בעוד {wait:.0f} שניות.",
+                                      f"One moment — you can ask again in {wait:.0f} s."))
+            if data["requests"] >= self.max_requests:
+                raise AdvisorError(tr(
+                    f"הגעת לתקרה היומית של {self.max_requests} שאלות. היא מתאפסת בחצות "
+                    f"(אפשר לשנות ב-.env: PULSEDECK_CLAUDE_DAILY_REQUESTS).",
+                    f"Daily limit of {self.max_requests} questions reached. It resets at midnight "
+                    f"(change it in .env: PULSEDECK_CLAUDE_DAILY_REQUESTS)."))
+            if data["tokens"] >= self.max_tokens:
+                raise AdvisorError(tr(
+                    f"הגעת לתקרה היומית של {self.max_tokens:,} טוקנים. היא מתאפסת בחצות "
+                    f"(אפשר לשנות ב-.env: PULSEDECK_CLAUDE_DAILY_TOKENS).",
+                    f"Daily limit of {self.max_tokens:,} tokens reached. It resets at midnight "
+                    f"(change it in .env: PULSEDECK_CLAUDE_DAILY_TOKENS)."))
+            data["requests"] += 1
+            data["last"] = self.now()
+            self._save(data)
+
+    def add_tokens(self, n: int) -> None:
+        with self._lock:
+            data = self._load()
+            data["tokens"] += max(0, int(n))
+            self._save(data)
+
+    def summary(self) -> str:
+        with self._lock:
+            data = self._load()
+        return tr(f"היום: {data['requests']}/{self.max_requests} שאלות · "
+                  f"{data['tokens'] / 1000:.1f}K/{self.max_tokens // 1000}K טוקנים",
+                  f"Today: {data['requests']}/{self.max_requests} questions · "
+                  f"{data['tokens'] / 1000:.1f}K/{self.max_tokens // 1000}K tokens")
+
+
+_budget: Budget | None = None
+
+
+def default_budget() -> Budget:
+    global _budget
+    if _budget is None:
+        _budget = Budget()
+    return _budget
+
+
 # ---------------------------------------------------------------- snapshot
 
 def build_snapshot(snap, groups, events, *, gpu_temp: float | None = None,
@@ -140,7 +248,7 @@ def build_snapshot(snap, groups, events, *, gpu_temp: float | None = None,
 # ---------------------------------------------------------------- request
 
 def ask_claude(snapshot: dict, question: str | None = None, *, language: str = "en",
-               client=None) -> str:
+               client=None, budget: Budget | None = None) -> str:
     """Send the snapshot (and an optional question); return Claude's answer.
 
     Blocking — call it from a worker thread, never the Tk thread. Raises
@@ -159,11 +267,15 @@ def ask_claude(snapshot: dict, question: str | None = None, *, language: str = "
                                 "The 'anthropic' package is missing: pip install anthropic")) from e
 
     lang_name = "Hebrew" if language == "he" else "English"
-    user_text = "Snapshot:\n" + json.dumps(snapshot, ensure_ascii=False, indent=1)
-    user_text += "\n\nQuestion: " + (question.strip() if question and question.strip()
-                                    else "What is going on with my computer right now?")
+    snapshot_text = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))[:MAX_SNAPSHOT_CHARS]
+    question = (question or "").strip()[:MAX_QUESTION_CHARS]
+    user_text = "Snapshot:\n" + snapshot_text
+    user_text += "\n\nQuestion: " + (question or "What is going on with my computer right now?")
+    budget = budget or default_budget()
+    budget.reserve()            # raises when a limit is reached; counts the request first
     try:
-        client = client or anthropic.Anthropic()
+        # No automatic retries and a hard timeout: one press, one attempt.
+        client = client or anthropic.Anthropic(timeout=TIMEOUT_SEC, max_retries=0)
         # Server-side fallback: if a safety classifier declines, the API
         # re-runs the request on Anthropic's recommended model instead of
         # returning a refusal.
@@ -188,6 +300,9 @@ def ask_claude(snapshot: dict, question: str | None = None, *, language: str = "
     except anthropic.RateLimitError as e:
         raise AdvisorError(tr("יותר מדי בקשות כרגע — נסה שוב בעוד דקה.",
                                 "Too many requests right now — try again in a minute.")) from e
+    except anthropic.APITimeoutError as e:
+        raise AdvisorError(tr(f"Claude לא ענה תוך {TIMEOUT_SEC} שניות, והבקשה בוטלה.",
+                                f"Claude did not answer within {TIMEOUT_SEC} s; the request was dropped.")) from e
     except anthropic.APIConnectionError as e:
         raise AdvisorError(tr("אין חיבור ל-Anthropic. בדוק את האינטרנט.",
                                 "Could not reach Anthropic. Check the internet connection.")) from e
@@ -197,6 +312,9 @@ def ask_claude(snapshot: dict, question: str | None = None, *, language: str = "
         raise AdvisorError(tr(f"Claude החזיר שגיאה ({e.status_code}). נסה שוב מאוחר יותר.",
                                 f"Claude returned an error ({e.status_code}). Try again later.")) from e
 
+    usage = getattr(response, "usage", None)
+    if usage is not None:
+        budget.add_tokens((getattr(usage, "input_tokens", 0) or 0) + (getattr(usage, "output_tokens", 0) or 0))
     if response.stop_reason == "refusal":
         raise AdvisorError(tr("Claude סירב לענות על זה.", "Claude declined to answer this one."))
     text = "\n".join(b.text for b in response.content if b.type == "text").strip()

@@ -19,6 +19,7 @@ history/spikes/
 history/*.log
 history/*.csv
 history/*.sqlite*
+history/claude_usage.json
 history/*.png
 history/spike_reports.md
 

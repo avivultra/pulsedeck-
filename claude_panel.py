@@ -52,6 +52,16 @@ def open_claude_panel(parent: tk.Misc, snapshot_fn: Callable[[], dict],
     body.tag_configure("dir", justify=justify)
     body.tag_configure("dim", foreground=DIM, justify=justify)
     body.pack(fill="both", expand=True, padx=16)
+    usage_var = tk.StringVar()
+    tk.Label(win, textvariable=usage_var, bg=BG, fg=DIM, font=(FONT, 8), anchor=anchor).pack(
+        fill="x", padx=16, pady=(4, 0))
+
+    def _show_usage() -> None:
+        try:
+            usage_var.set(ai_advisor.default_budget().summary())
+        except Exception:
+            log.debug("Usage summary unavailable", exc_info=True)
+    _show_usage()
 
     ask_row = tk.Frame(win, bg=BG, padx=16, pady=12)
     ask_row.pack(fill="x")
@@ -107,6 +117,7 @@ def open_claude_panel(parent: tk.Misc, snapshot_fn: Callable[[], dict],
             win.after(150, _poll)
             return
         busy["on"] = False
+        _show_usage()
         send.configure(state="normal")
         _show(text, "dir" if kind == "ok" else "dim")
 

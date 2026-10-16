@@ -11,6 +11,11 @@ from unittest import mock
 import ai_advisor
 
 
+def _budget(now=None):
+    kw = {"now": now} if now else {}
+    return ai_advisor.Budget(Path(tempfile.mkdtemp()) / "usage.json", **kw)
+
+
 def _snap(**kw):
     base = dict(cpu_percent=91.0, cpu_logical=8, ram_percent=60.0, ram_used=6 * 1024 ** 3,
                 ram_total=16 * 1024 ** 3, disk_percent=70.0, swap_percent=None,
@@ -57,7 +62,8 @@ class AskClaudeTest(unittest.TestCase):
         resp = NS(stop_reason="end_turn", content=[NS(type="thinking"), NS(type="text", text="All good.")])
         client, create = self._client(resp)
         with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}):
-            out = ai_advisor.ask_claude({"now": {}}, "why slow?", language="he", client=client)
+            out = ai_advisor.ask_claude({"now": {}}, "why slow?", language="he", client=client,
+                                        budget=_budget())
         self.assertEqual(out, "All good.")
         kw = create.call_args.kwargs
         self.assertEqual(kw["fallbacks"], "default")
@@ -69,7 +75,7 @@ class AskClaudeTest(unittest.TestCase):
         client, _ = self._client(NS(stop_reason="refusal", content=[]))
         with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}):
             with self.assertRaises(ai_advisor.AdvisorError):
-                ai_advisor.ask_claude({}, client=client)
+                ai_advisor.ask_claude({}, client=client, budget=_budget())
 
     def test_no_key_explains_the_env_file(self):
         env = {k: v for k, v in os.environ.items()
@@ -79,6 +85,59 @@ class AskClaudeTest(unittest.TestCase):
             with self.assertRaises(ai_advisor.AdvisorError) as ctx:
                 ai_advisor.ask_claude({})
         self.assertIn(".env", str(ctx.exception))
+
+
+class BudgetTest(unittest.TestCase):
+    def setUp(self):
+        self.t = 1_000_000.0
+        self.b = _budget(now=lambda: self.t)
+
+    def test_gap_between_requests(self):
+        self.b.reserve()
+        with self.assertRaises(ai_advisor.AdvisorError):
+            self.b.reserve()                     # 0 s later
+        self.t += ai_advisor.MIN_GAP_SEC
+        self.b.reserve()
+
+    def test_daily_request_and_token_caps_and_midnight_reset(self):
+        with mock.patch.dict(os.environ, {"PULSEDECK_CLAUDE_DAILY_REQUESTS": "2",
+                                          "PULSEDECK_CLAUDE_DAILY_TOKENS": "1000"}):
+            self.b.reserve()
+            self.t += 10
+            self.b.reserve()
+            self.t += 10
+            with self.assertRaises(ai_advisor.AdvisorError) as ctx:
+                self.b.reserve()
+            self.assertIn("2", str(ctx.exception))
+            self.t += 86400                      # next day
+            self.b.reserve()
+            self.b.add_tokens(1200)
+            self.t += 10
+            with self.assertRaises(ai_advisor.AdvisorError):
+                self.b.reserve()                 # token cap
+
+    def test_a_failing_request_still_counts(self):
+        client = NS(beta=NS(messages=NS(create=mock.Mock(side_effect=RuntimeError("boom")))))
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test",
+                                          "PULSEDECK_CLAUDE_DAILY_REQUESTS": "1"}):
+            with self.assertRaises(RuntimeError):
+                ai_advisor.ask_claude({}, client=client, budget=self.b)
+            self.t += 60
+            with self.assertRaises(ai_advisor.AdvisorError):   # the failure used the allowance
+                ai_advisor.ask_claude({}, client=client, budget=self.b)
+        self.assertEqual(client.beta.messages.create.call_count, 1)
+
+    def test_tokens_are_recorded_and_question_is_capped(self):
+        resp = NS(stop_reason="end_turn", content=[NS(type="text", text="ok")],
+                  usage=NS(input_tokens=300, output_tokens=200))
+        create = mock.Mock(return_value=resp)
+        client = NS(beta=NS(messages=NS(create=create)))
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}):
+            ai_advisor.ask_claude({}, "x" * 5000, client=client, budget=self.b)
+        self.assertIn("0.5K", self.b.summary())
+        sent = create.call_args.kwargs["messages"][0]["content"]
+        self.assertLess(sent.count("x"), ai_advisor.MAX_QUESTION_CHARS + 10)
+        self.assertEqual(create.call_args.kwargs["max_tokens"], 2000)
 
 
 if __name__ == "__main__":
