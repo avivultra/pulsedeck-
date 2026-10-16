@@ -165,17 +165,6 @@ class GroupByNameTest(unittest.TestCase):
         self.assertEqual((cpu, rss, count), (5.0, 300, 2))
 
 
-class TimeTicksTest(unittest.TestCase):
-    def test_ticks_are_round_and_few(self):
-        start = _wall_days(datetime(2026, 10, 1, 9, 7, 13))
-        for minutes in (5, 15, 60, 360, 1440):
-            ticks = live_chart._time_ticks(start, start + minutes / 1440)
-            self.assertTrue(1 <= len(ticks) <= 7, (minutes, len(ticks)))
-            for tv in ticks:
-                secs = round(tv * 86400)
-                self.assertEqual(secs % 60, 0)
-
-
 class SelfUsageTest(unittest.TestCase):
     def test_reports_plausible_numbers(self):
         from self_usage import format_self_usage, self_usage

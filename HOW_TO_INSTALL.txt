@@ -62,7 +62,7 @@ After installation:
   - The dock shows CPU/RAM/disk above your taskbar.
   - The tray icon (by the clock) gives quick access.
   - Right-click on the dock for the full menu:
-      • What's happening (who is using the computer, timeline, events)
+      • What's happening: a graph of everything on the computer (drag the bubbles, F11 = full screen)
       • View alerts and load detection
       • Clean unnecessary processes
       • Resize, move, pin, font size, etc.

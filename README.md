@@ -35,7 +35,7 @@ you **who** — and lets you close it with one confirmed click.
 ### How it works
 
 Python + `psutil` read the numbers; Tkinter draws the strip, the panels and
-the "What's happening" window. Anything slow (scanning processes, reading GPU sensors) runs
+the vault window. Anything slow (scanning processes, reading GPU sensors) runs
 in the background so the strip never freezes. It **never closes anything by
 itself** — every close is your decision, system processes are protected, and
 passwords that appear in command lines are masked. Typical footprint: about
@@ -75,7 +75,7 @@ look are all welcome as pull requests.
 
 ### איך זה עובד
 
-‏Python ו-`psutil` קוראים את המספרים, ו-Tkinter מצייר את הפס, החלונות וחלון "מה קורה במחשב".
+‏Python ו-`psutil` קוראים את המספרים, ו-Tkinter מצייר את הפס, החלונות וחלון הגרף בסגנון Obsidian.
 כל מה שאיטי (סריקת תהליכים, קריאת חיישני כרטיס המסך) רץ ברקע, כך שהפס לא נתקע.
 הוא **אף פעם לא סוגר שום דבר לבד** — כל סגירה היא החלטה שלכם, תהליכי מערכת
 מוגנים, וסיסמאות שמופיעות בשורות פקודה מוסתרות. צריכה רגילה: בערך 90MB זיכרון
@@ -111,12 +111,16 @@ look are all welcome as pull requests.
 - **Dock** — slim floating panel pinned above the taskbar; drag to reposition,
   right-click for menu, resize the font, pin/unpin
 - **Tray** — minimal system-tray icon with tooltip
-- **"What's happening" window** — answers "why is my computer slow?" at a
-  glance: a plain-words verdict (and the main culprit when something is busy),
-  who is using the most CPU and memory right now (same-name processes folded
-  together), a CPU/RAM timeline (5 min – 24 h) with load events marked and a
-  hover readout, today's load events with their suspects, and what PulseDeck
-  itself is using. Plain Tk, no matplotlib: opens instantly, ~4 ms per refresh
+- **Vault window** (Obsidian-style) — a live graph where every bubble is
+  something on the computer: programs (size = memory, ring = CPU, dots = their
+  processes), resources (CPU, memory, disk, network, temperature), today's load
+  events linked to their suspects, abandoned processes, and Claude. Drag
+  bubbles, zoom, click one to open its note (what it is, numbers, links, Ask
+  Claude, close). File tree and search on the side, F11 for full screen. The
+  physics sleeps once bubbles settle; bubbles are Pillow-rendered images,
+  cached, so an open idle window costs well under 1 % of a core
+- **Ask Claude** — on demand only: sends program names and numbers (no command
+  lines or paths) and shows a plain-words answer. Key goes in `.env`
 
 ### Alerts
 - **Spike detection** on configurable thresholds (default: 12% CPU jump, 6% RAM jump
@@ -312,7 +316,12 @@ monitor.py            ← entry point; sets up logging, config, dispatchers
 │
 ├── dock_strip.py     ← Tk dock UI (drag/resize/pin/font-scale)
 ├── tray_runner.py    ← pystray system-tray icon
-├── live_chart.py     ← "What's happening" window + history data layer
+├── vault_window.py   ← main window: Obsidian-style graph, notes, file tree
+├── vault_graph.py    ← what the bubbles are + the force layout (no Tk)
+├── vault_sprites.py  ← Pillow-rendered bubble images, cached
+├── live_chart.py     ← history data layer, spike parsing, alerts panel
+├── ai_advisor.py     ← Ask Claude: snapshot + Messages API call
+├── claude_panel.py   ← the Ask Claude window
 ├── self_usage.py     ← PulseDeck's own CPU / memory, shown in the UI
 │
 ├── process_monitor.py ← background sampler; per-PID activity & RSS
@@ -368,10 +377,9 @@ Adaptive sampling is the other half:
 - **Process sampler**: 2 s tick during the 30 s after any alert (so process data
   is fresh when the user opens a popup), 5 s tick when idle
 - **Janitor scanner**: 5 min tick (configurable), with cached parent-name lookup
-- **"What's happening" window**: history kept as float arrays, only rows
-  appended since the last refresh are parsed, windows found by binary search,
-  at most one point per pixel drawn on a plain Tk canvas; skipped while
-  minimised (~4 ms per refresh, vs ~470 ms for the old matplotlib chart)
+- **Vault window**: force layout runs only while bubbles move, then sleeps;
+  bubble images are cached and re-rendered only when their look changes; the
+  2 s data refresh is skipped while minimised (~18 ms per refresh)
 - **Dock**: `place_window()` runs only when the dock actually moves; topmost
   re-assertion throttled to every 5 ticks (~5 s)
 - **Ghost Sweeper**: one sweep every 20 minutes on its own thread. Expensive
@@ -444,7 +452,7 @@ keeps running.
 | Core monitoring | ✅ | ✅ | ✅ |
 | Dock (drag/pin/resize) | ✅ (above the taskbar on any edge; remembers a spot on a second monitor while it is connected) | ✅ (sensible defaults) | ✅ (sensible defaults) |
 | System tray | ✅ | ✅ | ✅ |
-| "What's happening" window | ✅ | ✅ | ✅ |
+| Vault window (graph) | ✅ | ✅ | ✅ |
 | Spike toasts | ✅ | ✅ | ✅ |
 | **`conhost.exe` Janitor** | ✅ | n/a (no conhost) | n/a |
 | **Ghost Sweeper** | ✅ | ✅ | ✅ |

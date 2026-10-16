@@ -17,11 +17,12 @@ import psutil
 
 import freeze_watch
 import hardware
+import i18n
 from i18n import tr
 
 log = logging.getLogger(__name__)
 
-from monitor import HistoryLogger, collect_snapshot, disk_root_path, format_gib_usage, spike_reports_enabled
+from monitor import HistoryLogger, collect_snapshot, disk_root_path, spike_reports_enabled
 from temperature_readings import read_gpu_memory_mib, read_gpu_temp_celsius
 
 
@@ -139,12 +140,14 @@ def run_dock_main(args: object) -> None:
         except Exception:
             log.exception("Could not persist dock state")
 
-    # Restored 3-row dock (richer look)
-    taskbar_edge = "#1a1c22"
-    bg = "#1e2229"
-    fg = "#e6e9ef"
-    accent = "#8fbcbb"
-    dim = "#b8c0cc"
+    # Three rows in the vault's (Obsidian-like) palette: state, the heaviest
+    # programs as #tags, and the last load event as a [[link]].
+    taskbar_edge = "#363636"
+    bg = "#1e1e1e"
+    fg = "#dadada"
+    accent = "#a882ff"
+    dim = "#b3b3b3"
+    tag_fg = "#b89cff"
 
     def _font(size_pt: float, bold: bool = False) -> tuple:
         size = max(7, int(round(size_pt * font_scale)))
@@ -169,15 +172,17 @@ def run_dock_main(args: object) -> None:
     # Ghost-sweeper indicator (hidden when nothing has been abandoned)
     lbl_ghosts = tk.Label(top_row, text="", bg=bg, fg="#a78bfa",
                           font=_font(9, bold=True), anchor="w", cursor="hand2")
+    lbl_dot = tk.Label(top_row, text="●", bg=bg, fg=accent, font=_font(9))
     lbl_cpu = tk.Label(top_row, text="CPU …", bg=bg, fg=fg, font=_font(10), anchor="w")
-    lbl_temp = tk.Label(top_row, text=tr("טמפ …", "Temp …"), bg=bg, fg=accent,
+    lbl_temp = tk.Label(top_row, text=tr("טמפ …", "Temp …"), bg=bg, fg=dim,
                         font=_font(9), anchor="e")
     # Order matters: fan button leftmost, then janitor (dynamic), then CPU.
     # Only on machines whose cooling utility answers the hotkey (hardware.py);
     # elsewhere Ctrl+Shift+1 would land in whatever window has focus.
     if hardware.fan_button_enabled(_cfg):
         lbl_fan.pack(side=tk.LEFT, padx=(10, 0), pady=4)
-    lbl_cpu.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=16, pady=4)
+    lbl_dot.pack(side=tk.LEFT, padx=(14, 0), pady=4)
+    lbl_cpu.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(6, 16), pady=4)
     lbl_temp.pack(side=tk.RIGHT, padx=16, pady=4)
     # janitor label is packed/forgotten dynamically inside tick()
     top_row.pack(fill=tk.X)
@@ -212,14 +217,58 @@ def run_dock_main(args: object) -> None:
     lbl_ghosts.bind("<Button-1>", _open_ghost_panel)
 
     var_line2 = tk.StringVar(value=tr("טוען…", "Loading…"))
-    lbl2 = tk.Label(body, textvariable=var_line2, bg=bg, fg=fg, font=_font(9),
+    lbl2 = tk.Label(body, textvariable=var_line2, bg=bg, fg=tag_fg, font=_font(9),
                     padx=16, pady=2)
     lbl2.pack(fill=tk.X)
 
+    row3 = tk.Frame(body, bg=bg)
+    row3.pack(fill=tk.X)
     var_line3 = tk.StringVar(value="")
-    lbl3 = tk.Label(body, textvariable=var_line3, bg=bg, fg=dim, font=_font(9),
-                    padx=16, pady=4)
-    lbl3.pack(fill=tk.X)
+    var_event = tk.StringVar(value="")
+    lbl_event = tk.Label(row3, textvariable=var_event, bg=bg, fg=accent, font=_font(9),
+                         cursor="hand2")
+    lbl3 = tk.Label(row3, textvariable=var_line3, bg=bg, fg=dim, font=_font(9), pady=4)
+    lbl_event.pack(side=i18n.SIDE(), padx=(16, 0) if i18n.SIDE() == "left" else (0, 16))
+    lbl3.pack(side=i18n.SIDE(), fill=tk.X, expand=True, padx=8)
+    lbl_event.bind("<Button-1>", lambda _e: _open_live_chart())
+
+    # Slow-changing strip content, refreshed every few ticks, never every second.
+    strip_cache: dict = {"tags": "", "tags_at": 0, "event": "", "event_sig": None}
+
+    def _refresh_tags_and_event(tick_no: int) -> None:
+        if tick_no - strip_cache["tags_at"] >= 5 or not strip_cache["tags"]:
+            strip_cache["tags_at"] = tick_no
+            try:
+                from live_chart import _group_by_name
+                from process_monitor import peek_default_sampler
+                sampler = peek_default_sampler()
+                groups = _group_by_name(sampler.snapshot()) if sampler is not None else []
+                top = sorted(groups, key=lambda g: g[2], reverse=True)[:3]
+                def _tag(name: str, rss: int) -> str:
+                    short = name.removesuffix(".exe")
+                    short = short if len(short) <= 12 else short[:11] + "…"
+                    size = f"{rss / 1024 ** 3:.1f}G" if rss >= 1024 ** 3 else f"{rss / 1024 ** 2:.0f}M"
+                    return f"#{short} {size}"
+                strip_cache["tags"] = "   ".join(_tag(name, rss) for name, _cpu, rss, _count in top)
+            except Exception:
+                log.debug("Strip tags unavailable", exc_info=True)
+        if tick_no % 10 == 0 or strip_cache["event_sig"] is None:
+            try:
+                from live_chart import _read_today_spikes
+                from metric_history import DEFAULT_SPIKES_DIR
+                target = DEFAULT_SPIKES_DIR / f"spikes-{time.strftime('%Y-%m-%d')}.md"
+                try:
+                    st = target.stat()
+                    sig = (target.name, st.st_size, st.st_mtime)
+                except OSError:
+                    sig = (target.name, None, None)
+                if sig != strip_cache["event_sig"]:
+                    strip_cache["event_sig"] = sig
+                    events = _read_today_spikes(DEFAULT_SPIKES_DIR)
+                    strip_cache["event"] = (f"[[{events[-1]['time'][:5]} {events[-1]['reason'][:28]}]]"
+                                            if events else "")
+            except Exception:
+                log.debug("Strip event unavailable", exc_info=True)
 
     # Drag-to-move: bind on body and child labels
     drag_state = {"x": 0, "y": 0, "moved": False}
@@ -239,7 +288,7 @@ def run_dock_main(args: object) -> None:
         if drag_state["moved"]:
             _persist_dock_state()
 
-    for w in (body, top_row, lbl_cpu, lbl_temp, lbl2, lbl3):
+    for w in (body, top_row, lbl_dot, lbl_cpu, lbl_temp, lbl2, row3, lbl3):
         w.bind("<Button-1>", _on_drag_start)
         w.bind("<B1-Motion>", _on_drag_motion)
         w.bind("<ButtonRelease-1>", _on_drag_release)
@@ -250,10 +299,12 @@ def run_dock_main(args: object) -> None:
         lbl_fan.config(font=_font(11))
         lbl_janitor.config(font=_font(9, bold=True))
         lbl_ghosts.config(font=_font(9, bold=True))
+        lbl_dot.config(font=_font(9))
         lbl_cpu.config(font=_font(10))
         lbl_temp.config(font=_font(9))
         lbl2.config(font=_font(9))
         lbl3.config(font=_font(9))
+        lbl_event.config(font=_font(9))
         place_window()
         _persist_dock_state()
 
@@ -454,7 +505,11 @@ def run_dock_main(args: object) -> None:
         snap = collect_snapshot(disk_path)
         history.log(snap)
 
-        lbl_cpu.config(text=f"CPU  {snap.cpu_percent:.0f}%  ·  {snap.cpu_logical} " + tr("ליבות", "cores"))
+        from live_chart import GREEN, _verdict
+        v_color, v_text, _issues = _verdict(snap.cpu_percent, snap.ram_percent, snap.temp_celsius)
+        lbl_dot.config(fg=accent if v_color == GREEN else v_color)
+        lbl_cpu.config(text=f"{v_text}    " + tr(f"מעבד {snap.cpu_percent:.0f}%", f"CPU {snap.cpu_percent:.0f}%")
+                       + "  ·  " + tr(f"זיכרון {snap.ram_percent:.0f}%", f"Memory {snap.ram_percent:.0f}%"))
         temp_parts: list[str] = []
         if snap.temp_celsius is not None:
             temp_parts.append(tr("מחשב", "CPU") + f" {snap.temp_celsius:.0f}°C")
@@ -474,10 +529,9 @@ def run_dock_main(args: object) -> None:
         short = snap.disk_path.rstrip("\\/") or snap.disk_path
         if len(short) > 6:
             short = short[:5] + "…"
-        var_line2.set(
-            f"RAM {snap.ram_percent:.0f}%  ({format_gib_usage(snap.ram_used, snap.ram_total)})  ·  "
-            + tr("דיסק", "Disk") + f" {short}: {d_pct}"
-        )
+        _refresh_tags_and_event(place_counter)
+        var_line2.set(strip_cache["tags"] or tr("טוען…", "Loading…"))
+        var_event.set(strip_cache["event"])
 
         io = psutil.net_io_counters()
         now = time.time()
@@ -492,7 +546,7 @@ def run_dock_main(args: object) -> None:
         net_last["sent"] = io.bytes_sent
         net_last["recv"] = io.bytes_recv
 
-        extras: list[str] = []
+        extras: list[str] = [tr("דיסק", "Disk") + f" {short}: {d_pct}"]
         if snap.swap_percent is not None:
             extras.append(tr("סוויפ", "Swap") + f" {snap.swap_percent:.0f}%")
         extras.append(net_txt)
