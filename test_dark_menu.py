@@ -132,16 +132,21 @@ class DarkMenuTest(_TkTest):
         cmd.assert_not_called()
 
 
+def _all_labels(widget):
+    for w in widget.winfo_children():
+        if isinstance(w, tk.Label):
+            yield w
+        yield from _all_labels(w)
+
+
 class NoticeTest(_TkTest):
     def _labels(self, widget):
-        for w in widget.winfo_children():
-            if isinstance(w, tk.Label):
-                yield w
-            yield from self._labels(w)
+        return _all_labels(widget)
 
     def test_shows_the_text_and_closes_on_escape(self):
         win = notice(self.root, "PulseDeck", "השפה תתחלף בהפעלה הבאה")
-        self.assertIn("השפה תתחלף בהפעלה הבאה", [w.cget("text") for w in self._labels(win)])
+        self.assertIn("השפה תתחלף בהפעלה הבאה",
+                      [w.cget("text").strip(i18n.RLE + i18n.PDF) for w in self._labels(win)])
         win.event_generate("<Escape>")
         self.settle()
         self.assertFalse(win.winfo_exists())
@@ -152,10 +157,54 @@ class NoticeTest(_TkTest):
         win = notice(self.root, "PulseDeck", "השפה תתחלף בהפעלה הבאה של PulseDeck.\n"
                                              "The language will change next time.\nC:\\Users\\x\\a.lnk")
         anchors = {w.cget("text"): w.cget("anchor") for w in self._labels(win)}
-        self.assertEqual(anchors["השפה תתחלף בהפעלה הבאה של PulseDeck."], "e")
+        # The Hebrew line is also embedded right-to-left, so "PulseDeck." stays at its end.
+        self.assertEqual(anchors[i18n.RLE + "השפה תתחלף בהפעלה הבאה של PulseDeck." + i18n.PDF], "e")
         self.assertEqual(anchors["The language will change next time."], "w")
         self.assertEqual(anchors["C:\\Users\\x\\a.lnk"], "w")
         win.destroy()
+
+    def test_a_long_hebrew_line_is_split_and_each_part_embedded(self):
+        # Tk would wrap it itself, but an embedding holds for one drawn line only.
+        from dark_menu import _rtl_lines
+        parts = _rtl_lines("מילה " * 60 + "chrome", ("Segoe UI", 10), 340)
+        self.assertGreater(len(parts), 2)
+        self.assertTrue(all(p.startswith(i18n.RLE) and p.endswith(i18n.PDF) for p in parts))
+        self.assertEqual(" ".join(p.strip(i18n.RLE + i18n.PDF) for p in parts), ("מילה " * 60 + "chrome"))
+
+
+class ConfirmTest(_TkTest):
+    def _button(self, win, text):
+        for w in _all_labels(win):
+            if w.cget("text") == text:
+                return w
+        raise AssertionError(text)
+
+    def test_only_the_ok_button_says_yes(self):
+        from dark_menu import confirm
+        answers = []
+        win = confirm(self.root, "לסגור את chrome?", "החלונות יקבלו בקשה להיסגר.", "סגור", answers.append,
+                      danger=True)
+        self.settle()
+        self._button(win, "סגור").event_generate("<ButtonRelease-1>")
+        self.settle()
+        self.assertEqual(answers, [True])
+        self.assertFalse(win.winfo_exists())
+
+    def test_cancel_escape_and_enter_on_a_dangerous_action_say_no(self):
+        from dark_menu import confirm
+        answers = []
+        win = confirm(self.root, "t", "x", "סגור", answers.append, danger=True)
+        self.settle()                              # a click reaches only a mapped label
+        self._button(win, "ביטול").event_generate("<ButtonRelease-1>")
+        self.settle()
+        win = confirm(self.root, "t", "x", "סגור", answers.append, danger=True)
+        win.update()
+        win.focus_force()
+        win.update()
+        win.event_generate("<Return>")             # Enter must not confirm a dangerous action
+        win.event_generate("<Escape>")
+        self.settle()
+        self.assertEqual(answers, [False, False])
 
 
 class DockMenuTest(_TkTest):

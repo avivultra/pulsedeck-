@@ -125,6 +125,12 @@ look are all welcome as pull requests.
   the per-program history; one click sends the summary to Ask Claude
 - **Ask Claude** — on demand only: sends program names and numbers (no command
   lines or paths) and shows a plain-words answer. Key goes in `.env`
+- **Ease the load** — Claude may suggest up to three actions on the programs
+  that loaded the PC over the last minute: *lower priority* (reversible) or
+  *close* (like clicking X). Each is a button; nothing runs until you confirm
+  it, and a forced close is a second, separate confirmation. Windows, the
+  antivirus, PulseDeck, editors, terminals, Claude and your servers are never
+  offered (`load_actions.py`, shared with the `/pulsedeck load` command)
 
 ### Alerts
 - **Spike detection** on configurable thresholds (default: 12% CPU jump, 6% RAM jump
@@ -236,6 +242,10 @@ python pulsedeck_mcp.py leftovers [folder]        # default: the current folder
 python pulsedeck_mcp.py port <N>
 python pulsedeck_mcp.py slow-at <HH:MM | YYYY-MM-DDTHH:MM>
 python pulsedeck_mcp.py close <pid> <create_time> <folder>
+python pulsedeck_mcp.py load                      # who loaded the PC over the last minute
+python pulsedeck_mcp.py lower <name>              # restore <name> undoes it
+python pulsedeck_mcp.py quit <name>               # like clicking X
+python pulsedeck_mcp.py force-quit <name>         # only after quit did not end it
 ```
 
 Each command prints its answer and exits with code 1 on an error (message on
@@ -243,9 +253,11 @@ stderr). To install the skill, copy `claude/skills/pulsedeck/` to
 `~/.claude/skills/pulsedeck/` and replace `<PULSEDECK_DIR>` in `SKILL.md` with
 the folder PulseDeck lives in. Then, in any Claude Code session:
 `/pulsedeck status`, `/pulsedeck leftovers`, `/pulsedeck port 8080`,
-`/pulsedeck slow-at 14:30`. The skill summarises the answer and asks you
-before every close, naming the process; it never closes system processes,
-PulseDeck, editors or terminals. `python` commands run without a permission
+`/pulsedeck slow-at 14:30`, `/pulsedeck load`. The skill summarises the
+answer and asks you before every action, naming the program — one yes, one
+action on one program, and a forced close only after a normal one failed and
+a second yes; it never touches system processes, the antivirus, PulseDeck,
+editors, terminals or Claude. `python` commands run without a permission
 prompt while the skill is active (`allowed-tools: Bash(python *)`), so that
 chat approval is what stands before a close.
 
@@ -260,8 +272,11 @@ claude mcp add --scope user pulsedeck -- python "C:\path\to\pulsedeck_mcp.py"
 Tools: `pulsedeck_status`, `pulsedeck_leftovers` (processes running from the
 project folder, with ports, connections, memory, age), `pulsedeck_port`,
 `pulsedeck_slow_at` (who was busy at a past time, from the per-program
-history) and `pulsedeck_close` (one process from that folder, and Claude Code
-asks you before every call).
+history), `pulsedeck_close` (one process from that folder, and Claude Code
+asks you before every call), `pulsedeck_load`, `pulsedeck_lower` /
+`pulsedeck_restore` and `pulsedeck_quit` / `pulsedeck_force_quit` (the last
+refused unless a normal quit of that program was tried in the last ten
+minutes).
 
 Both ways refuse to close system processes, editors, terminals, PulseDeck
 itself, anything with open connections and anything under a folder listed in
@@ -369,7 +384,7 @@ monitor.py            ← entry point; sets up logging, config, dispatchers
 ├── cpu_probes.py            ← psutil / Windows WMI / Linux thermal / macOS
 │
 ├── dock_strip.py     ← Tk dock UI (drag/resize/pin/font-scale)
-├── dark_menu.py      ← the dark right-click menus and message box (Windows' own are white)
+├── dark_menu.py      ← the dark right-click menus, message and confirm boxes (Windows' own are white)
 ├── tray_runner.py    ← pystray system-tray icon
 ├── vault_window.py   ← main window: Obsidian-style graph, notes, file tree
 ├── vault_graph.py    ← what the bubbles are + the force layout (no Tk)
@@ -380,7 +395,8 @@ monitor.py            ← entry point; sets up logging, config, dispatchers
 ├── pulsedeck_mcp.py  ← Claude Code helper: MCP server (stdio) or command line
 ├── claude/skills/pulsedeck/SKILL.md ← the /pulsedeck skill (on demand)
 ├── ai_advisor.py     ← Ask Claude: snapshot + Messages API call
-├── claude_panel.py   ← the Ask Claude window
+├── claude_panel.py   ← the Ask Claude window, with its suggested actions
+├── load_actions.py   ← who loads the PC; lower / restore / close / force, never automatic
 ├── self_usage.py     ← PulseDeck's own CPU / memory, shown in the UI
 │
 ├── process_monitor.py ← background sampler; per-PID activity & RSS
@@ -457,15 +473,18 @@ Typical footprint: **~90 MB RAM, ~1 % CPU** (measured on an 8-thread laptop).
 pytest
 ```
 
-257 unit tests across `test_monitor.py`, `test_ghost_sweeper.py`,
+286 unit tests across `test_monitor.py`, `test_ghost_sweeper.py`,
 `test_i18n.py`, `test_hardware.py`, `test_pulsedeck_mcp.py` (MCP protocol,
 the command line, UTF-8 pipes, and the never-close rules — fake processes
 apart from one sleep process the test starts and closes itself), the
 window and history tests, `test_server_guard.py` (protected
 folders, app parts, conversation titles — all on fake processes) and
 `test_idle_cleanup.py` (clean-all never offers or closes anything active,
-terminate outcomes, the freeze log, the WMI give-up) and `test_dark_menu.py`
-(the strip's menu still offers every action; placement, keyboard).
+terminate outcomes, the freeze log, the WMI give-up), `test_dark_menu.py`
+(the strip's menu still offers every action; placement, keyboard; the
+confirm box) and `test_load_actions.py` (what may be done to each program,
+lower/restore, close then force, Claude's suggestions filtered to what is
+allowed, the window's confirm-first flow — all on fake processes).
 
 `test_ghost_sweeper.py` covers the sweeper (parent resolution under PID reuse,
 verdict classification, first-sighting estimates, cross-scan stability of

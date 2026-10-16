@@ -62,7 +62,36 @@ Windows system processes or the antivirus; when closing a program is the \
 answer, say to close it normally (save work first), not to kill it.
 
 Keep it short — under 150 words unless the user asks a specific question. \
-If the snapshot is not enough to know, say so instead of guessing."""
+If the snapshot is not enough to know, say so instead of guessing.
+
+"load_last_minute" lists the programs that used the computer most over the \
+last minute, with what PulseDeck can do about each ("can"): "lower" lowers \
+its priority (it keeps working and gives way; reversible), "restore" undoes \
+that, "close" closes it normally, like clicking X. Programs with \
+"never_touched" are off limits. When acting on a program would clearly help, \
+write your answer first, then call suggest_actions once, with at most three \
+suggestions, safest first (prefer "lower" over "close"). Each one is one \
+program and one action from its "can". Suggest nothing when all is fine. \
+The user confirms every action; nothing runs on its own."""
+
+# Claude may propose actions; the window turns each into a button the user
+# confirms. Only names and actions from the snapshot's "can" lists survive.
+SUGGEST_TOOL = {
+    "name": "suggest_actions",
+    "description": "Offer the user up to three one-click actions on programs from load_last_minute. "
+                   "Each runs only after the user confirms it.",
+    "input_schema": {
+        "type": "object",
+        "properties": {"actions": {"type": "array", "maxItems": 3, "items": {
+            "type": "object",
+            "properties": {"program": {"type": "string"},
+                           "action": {"type": "string", "enum": ["lower", "restore", "close"]},
+                           "why": {"type": "string", "description": "One short sentence, in the answer's language."}},
+            "required": ["program", "action", "why"]}}},
+        "required": ["actions"],
+    },
+}
+MAX_SUGGESTIONS = 3
 
 
 class AdvisorError(Exception):
@@ -247,9 +276,42 @@ def build_snapshot(snap, groups, events, *, gpu_temp: float | None = None,
 
 # ---------------------------------------------------------------- request
 
+def _allowed_actions(snapshot: dict) -> dict[str, tuple[str, list[str]]]:
+    """lower-case name -> (name, its "can" list), from the snapshot."""
+    out = {}
+    for item in snapshot.get("load_last_minute") or []:
+        if item.get("can"):
+            out[str(item["name"]).lower()] = (str(item["name"]), list(item["can"]))
+    return out
+
+
+def _suggestions(content, allowed: dict) -> list[dict]:
+    """The suggest_actions call, kept only where it names a program and an
+    action the snapshot allows: the model cannot widen what the user sees."""
+    out: list[dict] = []
+    for block in content:
+        if getattr(block, "type", None) != "tool_use" or getattr(block, "name", None) != SUGGEST_TOOL["name"]:
+            continue
+        for a in (getattr(block, "input", None) or {}).get("actions") or []:
+            if not isinstance(a, dict):
+                continue
+            entry = allowed.get(str(a.get("program", "")).strip().lower())
+            action = a.get("action")
+            if entry is None or action not in entry[1]:
+                continue
+            if any(s["program"] == entry[0] for s in out):
+                continue
+            out.append({"program": entry[0], "action": action, "why": str(a.get("why") or "").strip()[:200]})
+    return out[:MAX_SUGGESTIONS]
+
+
 def ask_claude(snapshot: dict, question: str | None = None, *, language: str = "en",
-               client=None, budget: Budget | None = None) -> str:
+               client=None, budget: Budget | None = None, actions_out: list | None = None) -> str:
     """Send the snapshot (and an optional question); return Claude's answer.
+
+    When the snapshot has programs PulseDeck may act on and `actions_out` is
+    given, Claude may propose actions: the allowed ones are appended to it as
+    {"program", "action", "why"}. Nothing is run here.
 
     Blocking — call it from a worker thread, never the Tk thread. Raises
     AdvisorError with a user-facing message on any failure.
@@ -272,6 +334,8 @@ def ask_claude(snapshot: dict, question: str | None = None, *, language: str = "
     user_text = "Snapshot:\n" + snapshot_text
     user_text += "\n\nQuestion: " + (question or "What is going on with my computer right now?")
     budget = budget or default_budget()
+    allowed = _allowed_actions(snapshot) if actions_out is not None else {}
+    extra = {"tools": [SUGGEST_TOOL]} if allowed else {}
     budget.reserve()            # raises when a limit is reached; counts the request first
     try:
         # No automatic retries and a hard timeout: one press, one attempt.
@@ -287,6 +351,7 @@ def ask_claude(snapshot: dict, question: str | None = None, *, language: str = "
             output_config={"effort": "medium"},
             system=_SYSTEM_PROMPT.format(language=lang_name),
             messages=[{"role": "user", "content": user_text}],
+            **extra,
         )
     except anthropic.AuthenticationError as e:
         raise AdvisorError(tr("המפתח נדחה. בדוק את ANTHROPIC_API_KEY בקובץ .env.",
@@ -318,6 +383,11 @@ def ask_claude(snapshot: dict, question: str | None = None, *, language: str = "
     if response.stop_reason == "refusal":
         raise AdvisorError(tr("Claude סירב לענות על זה.", "Claude declined to answer this one."))
     text = "\n".join(b.text for b in response.content if b.type == "text").strip()
+    suggested = _suggestions(response.content, allowed) if allowed else []
+    if actions_out is not None:
+        actions_out.extend(suggested)
+    if not text and suggested:
+        text = tr("Claude מציע:", "Claude suggests:")
     if not text:
         raise AdvisorError(tr("Claude החזיר תשובה ריקה. נסה שוב.", "Claude returned an empty answer. Try again."))
     if response.stop_reason == "max_tokens":

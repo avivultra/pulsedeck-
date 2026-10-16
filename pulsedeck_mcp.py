@@ -14,6 +14,11 @@ Tools:
   pulsedeck_close         close ONE process that runs from the given folder;
                           system processes and PulseDeck are refused, and the
                           MCP client asks the user before every call
+  pulsedeck_load          who loaded the computer over the last minute, and
+                          what may be done about each program
+  pulsedeck_lower / _restore      lower one program's priority / put it back
+  pulsedeck_quit / _force_quit    close one program like clicking X / end it
+                          at once, only after quit did not (load_actions.py)
 
 Register with Claude Code (from the project folder you work in):
     claude mcp add pulsedeck -- python C:\\path\\to\\pulsedeck_mcp.py
@@ -21,6 +26,7 @@ Register with Claude Code (from the project folder you work in):
 Or use it without MCP, one command at a time (what the /pulsedeck skill does):
     python pulsedeck_mcp.py status | leftovers [folder] | port N | slow-at HH:MM
     python pulsedeck_mcp.py close <pid> <create_time> <folder>
+    python pulsedeck_mcp.py load | lower <name> | restore <name> | quit <name> | force-quit <name>
 """
 
 from __future__ import annotations
@@ -266,6 +272,33 @@ def tool_close(args: dict) -> str:
     return messages.get(outcome, outcome)
 
 
+def tool_load(_args: dict) -> str:
+    import load_actions
+    return load_actions.report(*load_actions.heavy_programs())
+
+
+def _program_action(fn_name: str):
+    def tool(args: dict) -> str:
+        import load_actions
+        name = str(args.get("name") or "").strip()
+        if not name:
+            raise ValueError("Which program? Pass its name as pulsedeck_load shows it.")
+        result = getattr(load_actions, fn_name)(name)
+        if result.outcome in ("refused", "not_running", "not_tried", "denied", "nothing"):
+            raise ValueError(result.text(english=True))
+        return result.text(english=True)
+    return tool
+
+
+tool_lower = _program_action("lower")
+tool_restore = _program_action("restore")
+tool_quit = _program_action("close")
+tool_force_quit = _program_action("force_close")
+
+_NAME_ONLY = {"type": "object", "properties": {"name": {"type": "string", "description":
+                                                        "Program name as pulsedeck_load shows it, e.g. chrome"}},
+              "required": ["name"], "additionalProperties": False}
+
 TOOLS = {
     "pulsedeck_status": (tool_status, "How the computer is doing right now and the heaviest programs.",
                          {"type": "object", "properties": {}, "additionalProperties": False}),
@@ -294,6 +327,25 @@ TOOLS = {
         {"type": "object", "properties": {"pid": {"type": "integer"}, "create_time": {"type": "number"},
                                           "folder": {"type": "string"}},
          "required": ["pid"], "additionalProperties": False}),
+    "pulsedeck_load": (
+        tool_load,
+        "Who loaded the computer over the last minute (CPU and memory per program), and what PulseDeck "
+        "may do about each one: lower, restore, close, or never touched (Windows, antivirus, PulseDeck, "
+        "editors, terminals, Claude, the user's servers).",
+        {"type": "object", "properties": {}, "additionalProperties": False}),
+    "pulsedeck_lower": (
+        tool_lower,
+        "Lower ONE program's CPU priority (reversible with pulsedeck_restore; it also resets when the "
+        "program restarts). Ask the user first, naming the program.", _NAME_ONLY),
+    "pulsedeck_restore": (tool_restore, "Put back the priority pulsedeck_lower changed.", _NAME_ONLY),
+    "pulsedeck_quit": (
+        tool_quit,
+        "Close ONE program the normal way, like clicking X on its windows (unsaved work prompts as "
+        "usual). Ask the user first, naming the program. Never forces.", _NAME_ONLY),
+    "pulsedeck_force_quit": (
+        tool_force_quit,
+        "End ONE program at once; unsaved work is lost. Refused unless pulsedeck_quit was tried on it in "
+        "the last ten minutes. Needs a second, separate yes from the user.", _NAME_ONLY),
 }
 
 
@@ -351,7 +403,12 @@ USAGE = """usage:
   python pulsedeck_mcp.py leftovers [folder]   default: the current folder
   python pulsedeck_mcp.py port <N>
   python pulsedeck_mcp.py slow-at <HH:MM | YYYY-MM-DDTHH:MM>
-  python pulsedeck_mcp.py close <pid> <create_time> <folder>"""
+  python pulsedeck_mcp.py close <pid> <create_time> <folder>
+  python pulsedeck_mcp.py load                 who loaded the computer over the last minute
+  python pulsedeck_mcp.py lower <name>         lower one program's priority (restore <name> undoes it)
+  python pulsedeck_mcp.py restore <name>
+  python pulsedeck_mcp.py quit <name>          close one program like clicking X
+  python pulsedeck_mcp.py force-quit <name>    end it at once, only after quit did not"""
 
 # command -> (tool, names of the positional arguments, how many are required)
 COMMANDS = {
@@ -360,6 +417,11 @@ COMMANDS = {
     "port": (tool_port, ("port",), 1),
     "slow-at": (tool_slow_at, ("time",), 1),
     "close": (tool_close, ("pid", "create_time", "folder"), 3),
+    "load": (tool_load, (), 0),
+    "lower": (tool_lower, ("name",), 1),
+    "restore": (tool_restore, ("name",), 1),
+    "quit": (tool_quit, ("name",), 1),
+    "force-quit": (tool_force_quit, ("name",), 1),
 }
 
 

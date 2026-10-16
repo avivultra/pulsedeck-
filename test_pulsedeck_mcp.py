@@ -33,7 +33,8 @@ class ProtocolTest(unittest.TestCase):
         self.assertEqual(replies[0]["result"]["protocolVersion"], "2025-06-18")
         names = {t["name"] for t in replies[1]["result"]["tools"]}
         self.assertEqual(names, {"pulsedeck_status", "pulsedeck_leftovers", "pulsedeck_port",
-                                 "pulsedeck_slow_at", "pulsedeck_close"})
+                                 "pulsedeck_slow_at", "pulsedeck_close", "pulsedeck_load", "pulsedeck_lower",
+                                 "pulsedeck_restore", "pulsedeck_quit", "pulsedeck_force_quit"})
         self.assertIn("Nothing is listening on port 1", replies[2]["result"]["content"][0]["text"])
         self.assertIn("error", replies[3])
 

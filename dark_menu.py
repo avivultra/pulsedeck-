@@ -341,58 +341,105 @@ class DarkMenu:
             self._highlight(None)
 
 
-def notice(parent: tk.Misc, title: str, text: str, warning: bool = False) -> tk.Toplevel:
-    """A small dark message box near `parent`, with an OK button. Closes on
-    OK, Enter, Esc or a click elsewhere."""
+TEXT_WIDTH = 340
+
+
+def _rtl_lines(text: str, font: tuple, width: int) -> list[str]:
+    """A Hebrew line broken into lines that fit `width`, each embedded
+    right-to-left. Tk would wrap it itself, but Windows lays every Tk line
+    out left to right: a Latin word or a number then lands on the wrong side,
+    and an embedding (i18n.bidi) holds for one drawn line only."""
+    from tkinter import font as tkfont
+    measure = tkfont.Font(font=font).measure
+    out, cur = [], ""
+    for word in text.split(" "):
+        test = f"{cur} {word}" if cur else word
+        if cur and measure(test) > width:
+            out.append(cur)
+            cur = word
+        else:
+            cur = test
+    out.append(cur)
+    return [i18n.bidi(line) for line in out]
+
+
+_BUTTON_COLORS = {"main": (ACCENT_SOFT, "#e6e0ff"), "danger": ("#4a1f22", "#ffb3b6"), "plain": (HOVER, FG_SOFT)}
+
+
+def _dialog(parent: tk.Misc, title: str, text: str, warning: bool, buttons: Sequence[tuple[str, bool, str]],
+            on_close: Callable[[bool], None] | None, enter: bool = True) -> tk.Toplevel:
+    """The shared dark box: title, text, then buttons (label, answer, one of
+    _BUTTON_COLORS). Esc or a click elsewhere answers False; Enter answers
+    True when `enter`."""
     win = tk.Toplevel(parent)
     win.withdraw()
     win.overrideredirect(True)
     win.configure(bg=EDGE)
     body = tk.Frame(win, bg=BG, padx=16, pady=12)
     body.pack(fill="both", expand=True, padx=1, pady=1)
-    tk.Label(body, text=title, bg=BG, fg=WARN if warning else ACCENT, font=_font(10, True),
-             anchor=i18n.ANCHOR()).pack(fill="x")
+    head_rtl = _reads_rtl(title)
+    tk.Label(body, text=i18n.bidi(title) if head_rtl else title, bg=BG, fg=WARN if warning else ACCENT,
+             font=_font(10, True), anchor="e" if head_rtl else "w").pack(fill="x")
     # One label per line: Windows lays out a whole label in the direction of
     # its first letter, so an English line under a Hebrew one would get its
     # full stop on the wrong side (".starts").
     lines = tk.Frame(body, bg=BG)
     lines.pack(fill="x", pady=(6, 10))
     for line in text.split("\n"):
-        rtl = _reads_rtl(line)
-        tk.Label(lines, text=line, bg=BG, fg=FG, font=_font(10), justify="right" if rtl else "left",
-                 anchor="e" if rtl else "w", wraplength=340).pack(fill="x")
+        if _reads_rtl(line) and i18n.is_rtl():
+            for part in _rtl_lines(line, _font(10), TEXT_WIDTH):
+                tk.Label(lines, text=part, bg=BG, fg=FG, font=_font(10), anchor="e").pack(fill="x")
+        else:
+            tk.Label(lines, text=line, bg=BG, fg=FG, font=_font(10), justify="left",
+                     anchor="w", wraplength=TEXT_WIDTH).pack(fill="x")
     closed = {"v": False}
 
-    def close(_e=None) -> None:
-        if not closed["v"]:
-            closed["v"] = True
+    def close(answer: bool = False) -> None:
+        if closed["v"]:
+            return
+        closed["v"] = True
+        try:
+            win.destroy()
+        except tk.TclError:
+            pass
+        if on_close is not None:
             try:
-                win.destroy()
-            except tk.TclError:
-                pass
+                on_close(answer)
+            except Exception:
+                log.exception("Dialog callback failed")
 
-    ok = tk.Label(body, text=i18n.tr("הבנתי", "OK"), bg=ACCENT_SOFT, fg="#e6e0ff",
-                  font=_font(9, True), padx=14, pady=3, cursor="hand2")
-    ok.pack(side=i18n.SIDE_END())
-    ok.bind("<ButtonRelease-1>", close)
+    row = tk.Frame(body, bg=BG)
+    row.pack(fill="x")
+    for label, answer, style in buttons:
+        bg, fg = _BUTTON_COLORS[style]
+        b = tk.Label(row, text=label, font=_font(9, True), padx=14, pady=3, cursor="hand2", bg=bg, fg=fg)
+        b.pack(side=i18n.SIDE_END(), padx=(6, 0) if i18n.SIDE_END() == "right" else (0, 6))
+        b.bind("<ButtonRelease-1>", lambda _e, a=answer: close(a))
 
     win.update_idletasks()
     w, h = win.winfo_reqwidth(), win.winfo_reqheight()
     try:
-        cx = parent.winfo_rootx() + parent.winfo_width() // 2
+        pw, ph = parent.winfo_width(), parent.winfo_height()
+        cx = parent.winfo_rootx() + pw // 2
         top = parent.winfo_rooty()
     except tk.TclError:
+        pw, ph = 0, 0
         cx, top = parent.winfo_screenwidth() // 2, parent.winfo_screenheight() // 2
     area = work_area_at(win, cx, top)
     x = max(area[0], min(cx - w // 2, area[2] - w))
-    y = top - h - 10 if top - h - 10 >= area[1] else top + 10
+    if ph >= 2 * h:                                  # a window: centred on it
+        y = top + (ph - h) // 3
+    else:                                            # the strip: just above it
+        y = top - h - 10 if top - h - 10 >= area[1] else top + 10
     win.geometry(f"{w}x{h}+{x}+{max(area[1], min(y, area[3] - h))}")
     win.deiconify()
     win.attributes("-topmost", True)
     win.lift()
     win.focus_force()
-    for key in ("<Return>", "<KP_Enter>", "<Escape>"):
-        win.bind(key, close)
+    win.bind("<Escape>", lambda _e: close(False))
+    if enter:
+        for key in ("<Return>", "<KP_Enter>"):
+            win.bind(key, lambda _e: close(True))
 
     def maybe_close() -> None:
         try:
@@ -400,7 +447,23 @@ def notice(parent: tk.Misc, title: str, text: str, warning: bool = False) -> tk.
         except (KeyError, tk.TclError):
             focus = None
         if focus is None:
-            close()
+            close(False)
 
     win.bind("<FocusOut>", lambda _e: win.after(60, maybe_close) if not closed["v"] else None)
     return win
+
+
+def notice(parent: tk.Misc, title: str, text: str, warning: bool = False) -> tk.Toplevel:
+    """A small dark message box near `parent`, with an OK button. Closes on
+    OK, Enter, Esc or a click elsewhere."""
+    return _dialog(parent, title, text, warning, [(i18n.tr("הבנתי", "OK"), True, "main")], None)
+
+
+def confirm(parent: tk.Misc, title: str, text: str, ok: str, on_answer: Callable[[bool], None],
+            danger: bool = False) -> tk.Toplevel:
+    """Ask before acting: `on_answer(True)` only after a click on `ok`.
+    Cancel, Esc and a click elsewhere answer False; Enter confirms only when
+    the action is not `danger`. Returns at once - the answer comes later."""
+    return _dialog(parent, title, text, danger,
+                   [(ok, True, "danger" if danger else "main"), (i18n.tr("ביטול", "Cancel"), False, "plain")],
+                   on_answer, enter=not danger)
