@@ -32,6 +32,7 @@ _ACTION_LABELS = {
     "restore": lambda n: tr(f"החזר עדיפות ל-{n}", f"Restore {n}'s priority"),
     "close": lambda n: tr(f"סגור את {n}", f"Close {n}"),
     "force": lambda n: tr(f"סגור את {n} בכוח", f"Force-close {n}"),
+    "clean": lambda n: tr(f"נקה את השאריות של {n}", f"Clean up {n}'s leftovers"),
 }
 
 
@@ -57,6 +58,13 @@ def _confirm_text(action: str, n: str) -> tuple[str, str, str, bool]:
                    "Its windows are asked to close, like clicking X.\n"
                    "If there is unsaved work, the program asks you before it closes."),
                 tr("סגור", "Close"), True)
+    if action == "clean":
+        return (tr(f"לנקות את השאריות של {n}?", f"Clean up {n}'s leftovers?"),
+                tr(f"ייסגרו רק תהליכים של {n} ש-PulseDeck מצא נטושים או לא פעילים: בלי חלון, בלי רשת ובלי מעבד.\n"
+                   "לפני הסגירה הוא בודק אותם שוב 3 שניות, ומה שהתעורר נשאר פתוח.",
+                   f"Only {n} processes PulseDeck found abandoned or idle are closed: no window, no network, no CPU.\n"
+                   "Each is checked again for 3 seconds first; anything that woke up stays open."),
+                tr("נקה", "Clean up"), True)
     return (tr(f"לסגור את {n} בכוח?", f"Force-close {n}?"),
             tr("היא לא נסגרה כרגיל.\nסגירה בכוח עוצרת אותה מיד, ועבודה שלא נשמרה תאבד.",
                "It did not close normally.\nA forced close stops it at once; unsaved work is lost."),
@@ -249,8 +257,8 @@ def open_claude_panel(parent: tk.Misc, snapshot_fn: Callable[[], dict],
 
     def _run(action: str, name: str, btn: tk.Label, status: tk.Label) -> None:
         import load_actions
-        fn = {"lower": load_actions.lower, "restore": load_actions.restore,
-              "close": load_actions.close, "force": load_actions.force_close}[action]
+        fn = {"lower": load_actions.lower, "restore": load_actions.restore, "close": load_actions.close,
+              "force": load_actions.force_close, "clean": load_actions.clean}[action]
         btn.unbind("<Button-1>")
         btn.configure(text=tr("רגע…", "Working…"), cursor="arrow")
         done: queue.Queue = queue.Queue()

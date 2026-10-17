@@ -623,17 +623,9 @@ def open_ghost_panel(parent) -> object:
         clean_btn.config(state="disabled", text=tr("🧹 בודק…", "🧹 Checking…"))
 
         def _gather():
-            from idle_cleanup import (claude_sessions_note, ghost_targets,
-                                      idle_hog_targets)
+            from idle_cleanup import claude_sessions_note, gather
             from process_monitor import peek_default_sampler
-            ghosts = ghost_targets(sweeper.get_ghosts())
-            taken = {t.pid for t in ghosts}
-            # Every process the sweeper saw (ghost or not) is the sweeper's to
-            # judge; the hog search only looks at what it did not report.
-            taken |= {g.pid for g in sweeper.get_ghosts()}
-            hogs, note = idle_hog_targets(peek_default_sampler(), exclude_pids=taken,
-                                          min_idle=sweeper.idle_seconds,
-                                          protected_dirs=sweeper.server_dirs)
+            ghosts, hogs, note, taken = gather(sweeper, peek_default_sampler())
             return ghosts, hogs, note, claude_sessions_note(taken)
 
         def _done(result) -> None:

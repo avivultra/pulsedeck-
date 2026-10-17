@@ -179,6 +179,32 @@ class GhostTargetsTest(unittest.TestCase):
             self.assertEqual(idle_cleanup.ghost_targets([self._ghost(1, "FINISHED")]), [])
 
 
+class GatherTest(unittest.TestCase):
+    """The one search behind both "Clean all" and Ask Claude's "clean"."""
+
+    def _ghost(self, pid, verdict):
+        return SimpleNamespace(pid=pid, name="node.exe", create_time=1.0, rss_bytes=200 * MIB,
+                               verdict=verdict, idle_for_seconds=3600.0)
+
+    def test_finished_ghosts_and_every_reported_pid_is_the_sweepers(self):
+        sweeper = SimpleNamespace(get_ghosts=lambda: [self._ghost(1, "FINISHED"), self._ghost(2, "WORKING")],
+                                  idle_seconds=1800.0, server_dirs=("e:\\srv",))
+        with mock.patch.object(idle_cleanup, "visible_window_pids", return_value=set()), \
+             mock.patch.object(idle_cleanup, "idle_hog_targets", return_value=([], "")) as hogs:
+            ghosts, found, _note, taken = idle_cleanup.gather(sweeper, "sampler")
+        self.assertEqual([t.pid for t in ghosts], [1])
+        self.assertEqual(found, [])
+        self.assertEqual(taken, {1, 2})
+        hogs.assert_called_once_with("sampler", exclude_pids={1, 2}, min_idle=1800.0,
+                                     protected_dirs=("e:\\srv",))
+
+    def test_without_a_sweeper_only_idle_hogs(self):
+        with mock.patch("pulsedeck_mcp._server_dirs", return_value=("e:\\srv",)), \
+             mock.patch.object(idle_cleanup, "idle_hog_targets", return_value=([], "note")) as hogs:
+            self.assertEqual(idle_cleanup.gather(None, None), ([], [], "note", set()))
+        hogs.assert_called_once_with(None, protected_dirs=("e:\\srv",))
+
+
 class VerifyIdleTest(unittest.TestCase):
     def _t(self, pid):
         return CleanupTarget(pid=pid, name=f"p{pid}.exe", create_time=1.0,

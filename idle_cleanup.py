@@ -302,6 +302,26 @@ def idle_hog_targets(sampler, *, exclude_pids: set[int] | None = None,
     return out, ""
 
 
+def gather(sweeper, sampler) -> tuple[list[CleanupTarget], list[CleanupTarget], str, set[int]]:
+    """What "Clean all" offers: (finished ghosts, idle hogs, note, every pid
+    the sweeper reported). Shared by the ghost panel's button and by Ask
+    Claude's "clean" action, so both follow the same rules. Without a
+    sweeper there are no ghosts, and the hog search falls back to its own
+    idle threshold and the configured server folders."""
+    if sweeper is None:
+        from pulsedeck_mcp import _server_dirs
+        hogs, note = idle_hog_targets(sampler, protected_dirs=_server_dirs())
+        return [], hogs, note, set()
+    reported = sweeper.get_ghosts()
+    ghosts = ghost_targets(reported)
+    # Every process the sweeper saw (ghost or not) is the sweeper's to
+    # judge; the hog search only looks at what it did not report.
+    taken = {t.pid for t in ghosts} | {g.pid for g in reported}
+    hogs, note = idle_hog_targets(sampler, exclude_pids=taken, min_idle=sweeper.idle_seconds,
+                                  protected_dirs=sweeper.server_dirs)
+    return ghosts, hogs, note, taken
+
+
 def claude_sessions_note(exclude_pids: set[int]) -> str:
     """Hebrew hint about open Claude Code sessions, which are never offered as
     idle hogs: a session waiting for your next message looks idle but is not."""

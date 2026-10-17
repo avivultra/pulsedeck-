@@ -243,6 +243,73 @@ class CloseTest(_Fixture):
         self.assertEqual(r.text(english=True), "chrome closed, freeing about 1.0 GB.")
 
 
+class LeftoversTest(unittest.TestCase):
+    """Ask Claude's "clean": what "Clean all" would offer, by program, and
+    closed only after the never-touched rules and a fresh idle check.
+    Nothing real is closed: the search, the check and the close are mocked."""
+
+    def _t(self, pid, name="node.exe", kind="ghost", mb=200):
+        from idle_cleanup import CleanupTarget
+        return CleanupTarget(pid=pid, name=name, create_time=1.0, rss_bytes=mb * 1024 ** 2,
+                             kind=kind, detail="", member_pids=(pid,))
+
+    def test_grouped_by_program_heaviest_first(self):
+        out = la.leftovers_for_claude([self._t(1), self._t(2, kind="idle"), self._t(3, "Slack.exe", "idle", 900)])
+        self.assertEqual(out, [
+            {"name": "Slack", "count": 1, "memory_mb": 900, "kind": "idle", "can": ["clean"]},
+            {"name": "node", "count": 2, "memory_mb": 400, "kind": "mixed", "can": ["clean"]}])
+
+    def test_never_touched_programs_are_not_leftovers(self):
+        found = ([self._t(1), self._t(2, "conhost.exe"), self._t(3, "Code.exe")], [self._t(4, "pwsh.exe", "idle")],
+                 "", set())
+        with mock.patch("idle_cleanup.gather", return_value=found):
+            self.assertEqual([t.pid for t in la.leftovers()], [1])
+
+    def _clean(self, name, found, *, why=None, woke=(), closed="closed"):
+        guard = mock.Mock()
+        guard.why.side_effect = lambda pid, _key: (why or {}).get(pid)
+
+        def verify(targets):
+            return [t for t in targets if t.pid not in woke], [(t, "woke") for t in targets if t.pid in woke]
+        with mock.patch.object(la, "leftovers", return_value=found), \
+             mock.patch.object(la, "_Guard", return_value=guard), \
+             mock.patch("idle_cleanup.verify_idle", side_effect=verify) as check, \
+             mock.patch("idle_cleanup.close_targets",
+                        side_effect=lambda ts: [(t, closed) for t in ts]) as close:
+            return la.clean(name), check, close
+
+    def test_closes_only_that_programs_leftovers(self):
+        r, check, close = self._clean("node", [self._t(1), self._t(2), self._t(3, "Slack.exe", "idle")])
+        self.assertEqual((r.outcome, r.done, r.total), ("cleaned", 2, 2))
+        self.assertEqual(r.freed, 400 * 1024 ** 2)
+        self.assertEqual([t.pid for t in close.call_args.args[0]], [1, 2])
+        self.assertTrue(r.ok)
+
+    def test_a_leftover_that_woke_up_stays(self):
+        r, _check, close = self._clean("node", [self._t(1), self._t(2)], woke={2})
+        self.assertEqual((r.outcome, r.done, r.total), ("partly", 1, 2))
+        self.assertEqual([t.pid for t in close.call_args.args[0]], [1])
+        r, _check, close = self._clean("node", [self._t(1)], woke={1})
+        self.assertEqual(r.outcome, "woke")
+        close.assert_not_called()
+
+    def test_never_reaches_protected_processes(self):
+        r, check, close = self._clean("claude", [self._t(1, "claude.exe")])
+        self.assertEqual((r.outcome, r.reason), ("refused", "claude"))
+        r, check, close = self._clean("pythonw", [self._t(5, "pythonw.exe")], why={5: "pulsedeck"})
+        self.assertEqual(r.outcome, "no_leftovers")
+        check.assert_not_called()
+        close.assert_not_called()
+
+    def test_messages_in_both_languages(self):
+        import i18n
+        i18n.set_language("he")
+        r = la.Result("clean", "cleaned", "node", done=3, total=3, freed=GB)
+        self.assertEqual(r.text(), "נוקו 3 שאריות של node ושוחררו בערך 1.0 GB.")
+        self.assertEqual(r.text(english=True), "Cleaned up 3 node leftover(s), freeing about 1.0 GB.")
+        self.assertIn("שאריות", la.Result("clean", "partly", "node", done=1, total=2).text())
+
+
 class ClaudeUsageTest(unittest.TestCase):
     """Claude's own share, for Ask Claude: counts and megabytes only."""
 
@@ -287,7 +354,9 @@ class SuggestionsTest(unittest.TestCase):
 
     SNAP = {"load_last_minute": [
         {"name": "chrome", "can": ["lower", "close"]}, {"name": "python", "can": ["lower"]},
-        {"name": "MsMpEng", "never_touched": "antivirus"}]}
+        {"name": "MsMpEng", "never_touched": "antivirus"}],
+        "leftovers": [{"name": "node", "count": 3, "memory_mb": 600, "kind": "abandoned", "can": ["clean"]},
+                      {"name": "python", "count": 1, "memory_mb": 150, "kind": "idle", "can": ["clean"]}]}
 
     def _response(self, actions, text="המחשב עמוס בגלל chrome."):
         return NS(stop_reason="tool_use", usage=None, content=[
@@ -317,6 +386,15 @@ class SuggestionsTest(unittest.TestCase):
         self.assertEqual(text, "המחשב עמוס בגלל chrome.")
         self.assertEqual(kw["tools"][0]["name"], "suggest_actions")
 
+    def test_clean_only_for_leftovers(self):
+        out: list = []
+        self._ask(self._response([
+            {"program": "chrome", "action": "clean", "why": "x"},          # chrome has no leftovers
+            {"program": "node", "action": "clean", "why": "3 נטושים"},
+            {"program": "python", "action": "clean", "why": "לא פעיל"},    # lower from the minute, clean from leftovers
+        ]), out)
+        self.assertEqual([(a["program"], a["action"]) for a in out], [("node", "clean"), ("python", "clean")])
+
     def test_no_tool_without_actions_out(self):
         import ai_advisor
         create = mock.Mock(return_value=NS(stop_reason="end_turn", usage=None,
@@ -335,7 +413,7 @@ class ConfirmTextTest(unittest.TestCase):
         from dark_menu import _reads_rtl
         i18n.set_language("he")
         try:
-            for action in ("lower", "restore", "close", "force"):
+            for action in ("lower", "restore", "close", "force", "clean"):
                 title, text, ok, _danger = _confirm_text(action, "chrome")
                 for line in [title, ok] + text.split("\n"):
                     self.assertTrue(_reads_rtl(line), (action, line))
@@ -391,6 +469,8 @@ class PanelTest(unittest.TestCase):
         with mock.patch.object(ai_advisor, "is_configured", return_value=True), \
              mock.patch.object(ai_advisor, "ask_claude", side_effect=fake_ask), \
              mock.patch.object(la, "heavy_programs", return_value=([], "history")), \
+             mock.patch.object(la, "leftovers", return_value=[]), \
+             mock.patch.object(la, "_claude_rows", return_value=[]), \
              mock.patch.object(la, "close", return_value=not_closed) as close, \
              mock.patch.object(la, "force_close", return_value=la.Result("force", "closed", "slack")) as force, \
              mock.patch.object(dark_menu, "confirm", side_effect=lambda *a, **k: dialogs.append((a, k))
@@ -418,6 +498,34 @@ class PanelTest(unittest.TestCase):
             dialogs[1][0][4](True)
             self._wait_for(lambda: force.called)
             force.assert_called_once_with("slack")
+            win.destroy()
+
+    def test_clean_suggestion_asks_as_dangerous_then_runs(self):
+        import ai_advisor
+        import claude_panel
+        import dark_menu
+
+        def fake_ask(snapshot, question, language, actions_out):
+            actions_out.append({"program": "node", "action": "clean", "why": "3 תהליכים נטושים"})
+            return "יש שאריות."
+
+        dialogs = []
+        cleaned = la.Result("clean", "cleaned", "node", done=3, total=3, freed=GB)
+        with mock.patch.object(ai_advisor, "is_configured", return_value=True), \
+             mock.patch.object(ai_advisor, "ask_claude", side_effect=fake_ask), \
+             mock.patch.object(la, "context_for_claude", return_value={}), \
+             mock.patch.object(la, "clean", return_value=cleaned) as clean, \
+             mock.patch.object(dark_menu, "confirm", side_effect=lambda *a, **k: dialogs.append((a, k))):
+            win = claude_panel.open_claude_panel(self.root, lambda: {})
+            self._wait_for(lambda: any("node" in w.cget("text") for w in self._labels(win)))
+            button = next(w for w in self._labels(win) if "נקה את השאריות של node" in w.cget("text"))
+            button.event_generate("<Button-1>")
+            self.root.update()
+            clean.assert_not_called()                          # asked, not run
+            self.assertTrue(dialogs[0][1].get("danger"))
+            dialogs[0][0][4](True)
+            self._wait_for(lambda: clean.called and "✓" in button.cget("text"))
+            clean.assert_called_once_with("node")
             win.destroy()
 
 

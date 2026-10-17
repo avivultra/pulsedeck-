@@ -91,9 +91,18 @@ from the Claude app; one of them is probably the session they work in.
 last minute, with what PulseDeck can do about each ("can"): "lower" lowers \
 its priority (it keeps working and gives way; reversible), "restore" undoes \
 that, "close" closes it normally, like clicking X. Programs with \
-"never_touched" are off limits. When acting on a program would clearly help, \
-write your answer first, then call suggest_actions once, with at most three \
-suggestions, safest first (prefer "lower" over "close"). Each one is one \
+"never_touched" are off limits.
+
+"leftovers" (when present) are processes PulseDeck found left over, by \
+program: "abandoned" ones finished their work and whatever started them is \
+gone; "idle" ones have not used the CPU for a long time and have no window \
+and no network. Their "can" is "clean": it closes exactly those processes, \
+not the program's others, after proving once more that they are still idle. \
+Leftovers that hold real memory are worth cleaning.
+
+When acting on a program would clearly help, write your answer first, then \
+call suggest_actions once, with at most three suggestions, safest first \
+(prefer "clean" for leftovers, and "lower" over "close"). Each one is one \
 program and one action from its "can". Suggest nothing when all is fine. \
 The user confirms every action; nothing runs on its own."""
 
@@ -101,14 +110,14 @@ The user confirms every action; nothing runs on its own."""
 # confirms. Only names and actions from the snapshot's "can" lists survive.
 SUGGEST_TOOL = {
     "name": "suggest_actions",
-    "description": "Offer the user up to three one-click actions on programs from load_last_minute. "
-                   "Each runs only after the user confirms it.",
+    "description": "Offer the user up to three one-click actions on programs from load_last_minute "
+                   "or leftovers. Each runs only after the user confirms it.",
     "input_schema": {
         "type": "object",
         "properties": {"actions": {"type": "array", "maxItems": 3, "items": {
             "type": "object",
             "properties": {"program": {"type": "string"},
-                           "action": {"type": "string", "enum": ["lower", "restore", "close"]},
+                           "action": {"type": "string", "enum": ["lower", "restore", "close", "clean"]},
                            "why": {"type": "string", "description": "One short sentence, in the answer's language."}},
             "required": ["program", "action", "why"]}}},
         "required": ["actions"],
@@ -394,11 +403,14 @@ def _fit(snapshot: dict, limit: int = MAX_SNAPSHOT_CHARS) -> str:
 
 
 def _allowed_actions(snapshot: dict) -> dict[str, tuple[str, list[str]]]:
-    """lower-case name -> (name, its "can" list), from the snapshot."""
-    out = {}
-    for item in snapshot.get("load_last_minute") or []:
+    """lower-case name -> (name, its "can" list), from the snapshot. A
+    program in both lists gets both: "lower" from the last minute, "clean"
+    from its leftovers."""
+    out: dict[str, tuple[str, list[str]]] = {}
+    for item in (snapshot.get("load_last_minute") or []) + (snapshot.get("leftovers") or []):
         if item.get("can"):
-            out[str(item["name"]).lower()] = (str(item["name"]), list(item["can"]))
+            name, can = out.get(str(item["name"]).lower(), (str(item["name"]), []))
+            out[name.lower()] = (name, can + [a for a in item["can"] if a not in can])
     return out
 
 

@@ -342,7 +342,7 @@ class Result:
 
     @property
     def ok(self) -> bool:
-        return self.outcome in ("lowered", "restored", "closed")
+        return self.outcome in ("lowered", "restored", "closed", "cleaned")
 
     @property
     def can_force(self) -> bool:
@@ -389,6 +389,18 @@ def _describe(r: Result) -> tuple[str, str]:
     if r.outcome == "not_tried":
         return (f"סגירה בכוח רק אחרי ניסיון לסגור את {n} כרגיל (בעשר הדקות האחרונות).",
                 f"A forced close comes only after a normal close of {n} was tried (in the last ten minutes).")
+    if r.outcome == "cleaned":
+        freed = f" ושוחררו בערך {_fmt_bytes(r.freed)}" if r.freed else ""
+        freed_en = f", freeing about {_fmt_bytes(r.freed)}" if r.freed else ""
+        return (f"נוקו {r.done} שאריות של {n}{freed}.", f"Cleaned up {r.done} {n} leftover(s){freed_en}.")
+    if r.outcome == "no_leftovers":
+        return f"אין עכשיו שאריות של {n}.", f"{n} has no leftovers now."
+    if r.outcome == "woke":
+        return (f"השאריות של {n} התעוררו בינתיים, אז לא נגעתי בהן.",
+                f"{n}'s leftovers woke up in the meantime, so they were left alone.")
+    if r.outcome == "partly" and r.action == "clean":
+        return (f"נוקו {r.done} מתוך {r.total} שאריות של {n}. השאר התעוררו, או ש-Windows לא נתן הרשאה.",
+                f"Cleaned up {r.done} of {r.total} {n} leftovers; the rest woke up or Windows refused.")
     if r.outcome == "partly":
         return (f"נסגרו {r.done} מתוך {r.total} תהליכים של {n}. על השאר Windows לא נתן הרשאה.",
                 f"Closed {r.done} of {r.total} {n} processes; Windows refused the rest.")
@@ -519,9 +531,67 @@ def force_close(name: str) -> Result:
     return Result("force", outcome, prog.name, done=done, total=total, freed=freed)
 
 
+# ------------------------------------------------------------------ leftovers
+
+def _never_reason(key: str) -> str | None:
+    return next((reason for reason, names in NEVER.items() if key in names), None)
+
+
+def leftovers() -> list:
+    """What "Clean all" would offer right now (idle_cleanup.gather): processes
+    the Ghost Sweeper judged finished, and idle memory hogs with no window
+    and no network. Programs that are never touched are left out here too."""
+    from ghost_sweeper import peek_default_sweeper
+    from idle_cleanup import gather
+    from process_monitor import peek_default_sampler
+    ghosts, hogs, _note, _taken = gather(peek_default_sweeper(), peek_default_sampler())
+    return [t for t in ghosts + hogs if _never_reason(_short(t.name).lower()) is None]
+
+
+def leftovers_for_claude(targets: list) -> list[dict]:
+    """The leftovers by program, heaviest first: names and numbers only."""
+    groups: dict[str, list] = {}
+    for t in targets:
+        groups.setdefault(_short(t.name).lower(), []).append(t)
+    out = []
+    for ts in sorted(groups.values(), key=lambda ts: sum(t.rss_bytes for t in ts), reverse=True):
+        kinds = {t.kind for t in ts}
+        out.append({"name": _short(ts[0].name), "count": len(ts),
+                    "memory_mb": round(sum(t.rss_bytes for t in ts) / 1024 ** 2),
+                    "kind": "abandoned" if kinds == {"ghost"} else "idle" if kinds == {"idle"} else "mixed",
+                    "can": ["clean"]})
+    return out[:CLAUDE_TOP]
+
+
+def clean(name: str) -> Result:
+    """Close one program's leftovers: what "Clean all" offers under that name
+    right now, each checked again against the never-touched rules and proven
+    idle once more (idle_cleanup.verify_idle, 3 s) just before. A process
+    that woke up stays. Blocking - call it off the Tk thread."""
+    from idle_cleanup import close_targets, verify_idle
+    shown = _short(name.strip())
+    key = shown.lower()
+    never = _never_reason(key)
+    if never:
+        return Result("clean", "refused", shown, reason=never)
+    guard = _Guard()
+    targets = [t for t in leftovers() if _short(t.name).lower() == key and guard.why(t.pid, key) is None]
+    if not targets:
+        return Result("clean", "no_leftovers", shown)
+    ok, _woke = verify_idle(targets)
+    if not ok:
+        return Result("clean", "woke", shown, total=len(targets))
+    closed = close_targets(ok)
+    done = [t for t, outcome in closed if outcome in ("closed", "already_gone")]
+    freed = sum(t.rss_bytes for t, outcome in closed if outcome == "closed")
+    outcome = "cleaned" if len(done) == len(targets) else "partly" if done else "denied"
+    log.info("Cleaned %d of %d %s leftover(s)", len(done), len(targets), shown)
+    return Result("clean", outcome, shown, done=len(done), total=len(targets), freed=freed)
+
+
 # ------------------------------------------------------------------ for Claude
 
-CLAUDE_TOP = 10                 # programs "Ask Claude" looks at, by CPU and by memory
+CLAUDE_TOP = 10                # programs "Ask Claude" looks at, by CPU and by memory
 SHELLS = {"pwsh", "powershell", "cmd", "bash", "sh", "conhost", "openconsole"}
 SESSION_IDLE_SEC = 3600         # a Claude Code session this quiet is probably not in use
 SHELL_OLD_SEC = 6 * 3600
@@ -612,6 +682,12 @@ def context_for_claude() -> dict:
             out["claude_app"] = usage
     except Exception:
         log.exception("Could not measure Claude's own share")
+    try:
+        found = leftovers_for_claude(leftovers())
+        if found:
+            out["leftovers"] = found
+    except Exception:
+        log.exception("Could not look for leftovers")
     return out
 
 
