@@ -63,6 +63,41 @@ def _confirm_text(action: str, n: str) -> tuple[str, str, str, bool]:
             tr("סגור בכוח", "Force close"), True)
 
 
+def _plain(text: str) -> str:
+    """Claude's answer without Markdown marks: the window shows plain text,
+    where "**bold**" would keep its asterisks."""
+    out = []
+    for line in text.replace("\r\n", "\n").split("\n"):
+        line = line.replace("**", "").replace("__", "").replace("`", "").rstrip()
+        bare = line.lstrip()
+        if bare.startswith("#"):
+            line = bare.lstrip("#").strip()
+        elif bare[:2] in ("- ", "* "):
+            line = "• " + bare[2:]
+        out.append(line)
+    return "\n".join(out).strip()
+
+
+def _has_hebrew(text: str) -> bool:
+    return any("֐" <= ch <= "׿" for ch in text)
+
+
+def _lay_out(text: str, font: tuple, width: int) -> str:
+    """Every Hebrew paragraph broken into lines that fit `width`, each line
+    embedded right to left (dark_menu._rtl_lines). Tk's own wrapping is not
+    enough on Windows: each drawn line is laid out left to right, so a
+    wrapped Hebrew line loses its order and its first letters. A paragraph
+    that starts with an English name ("PowerShell פותח...") is still Hebrew.
+    Other paragraphs are left to Tk."""
+    if not i18n.is_rtl():
+        return text
+    from dark_menu import _rtl_lines
+    out: list[str] = []
+    for para in text.split("\n"):
+        out.extend(_rtl_lines(para, font, width) if _has_hebrew(para) else [para])
+    return "\n".join(out)
+
+
 def open_claude_panel(parent: tk.Misc, snapshot_fn: Callable[[], dict],
                       first_question: str | None = None) -> tk.Toplevel:
     """Open the panel and immediately ask `first_question` (default: "what is
@@ -116,12 +151,26 @@ def open_claude_panel(parent: tk.Misc, snapshot_fn: Callable[[], dict],
 
     results: queue.Queue = queue.Queue()
     busy = {"on": False}
+    shown = {"text": "", "tag": "dir", "width": 0}
 
-    def _show(text: str, tag: str = "dir") -> None:
+    def _render() -> None:
+        # The width Tk wraps at: the widget minus its padding and border,
+        # less a margin so a measured line never wraps a second time.
+        width = body.winfo_width()
+        shown["width"] = width
+        if width <= 1:                      # not on screen yet
+            width = 520 - 2 * 16
+        width -= 2 * 14 + 2 * int(body.cget("borderwidth")) + 16
         body.configure(state="normal")
         body.delete("1.0", "end")
-        body.insert("1.0", text, tag)
+        body.insert("1.0", _lay_out(shown["text"], (FONT, 10), width), shown["tag"])
         body.configure(state="disabled")
+
+    def _show(text: str, tag: str = "dir") -> None:
+        shown.update(text=_plain(text), tag=tag)
+        _render()
+
+    body.bind("<Configure>", lambda e: e.width != shown["width"] and _render())
 
     def _ask(question: str | None = None) -> None:
         if busy["on"]:

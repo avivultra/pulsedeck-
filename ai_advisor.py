@@ -72,7 +72,10 @@ Windows system processes or the antivirus; when closing a program is the \
 answer, say to close it normally (save work first), not to kill it.
 
 Keep it short — under 150 words unless the user asks a specific question. \
-If the snapshot is not enough to know, say so instead of guessing.
+If the snapshot is not enough to know, say so instead of guessing. Write \
+plain text: no Markdown (no **, # headings or tables), the window shows it \
+as is. In Hebrew, avoid parentheses (write "node, 3 תהליכים, 420MB"): \
+Windows draws them the wrong way round in a Hebrew line.
 
 "load_last_minute" lists the programs that used the computer most over the \
 last minute, with what PulseDeck can do about each ("can"): "lower" lowers \
