@@ -94,6 +94,7 @@ def build_dock_menu(root: tk.Misc, a: SimpleNamespace):
                  a.language, a.set_language, icon="🌍")
     m.add_command(tr("אפס מיקום", "Reset position"), a.reset_position, icon="⟲")
     m.add_separator()
+    m.add_switch(tr("הפעל עם Windows", "Start with Windows"), a.autostart, a.toggle_autostart, icon="🚀")
     m.add_command(tr("התקן קיצור בשולחן העבודה", "Install desktop shortcut"), a.install_shortcut, icon="🖥")
     m.add_command(tr("יציאה", "Exit"), a.exit, icon="🚪", danger=True)
     return m
@@ -398,6 +399,27 @@ def run_dock_main(args: object) -> None:
         except Exception:
             log.exception("Desktop shortcut installation failed from dock menu")
 
+    def _autostart_on() -> bool:
+        try:
+            import autostart
+            return autostart.is_enabled()
+        except Exception:
+            log.debug("Start with Windows state unavailable", exc_info=True)
+            return False
+
+    def _toggle_autostart() -> None:
+        """The user's own switch: a registry value under HKCU\\...\\Run."""
+        from dark_menu import notice
+        try:
+            import autostart
+            autostart.set_enabled(not autostart.is_enabled())
+        except Exception:
+            log.exception("Could not change Start with Windows")
+            notice(root, "PulseDeck",
+                   tr("לא הצלחתי לשנות את ההפעלה עם Windows. ראה history/monitor.log",
+                      "Could not change Start with Windows. See history/monitor.log"),
+                   warning=True)
+
     def _open_servers_panel() -> None:
         try:
             from server_scanner import open_servers_panel
@@ -442,7 +464,7 @@ def run_dock_main(args: object) -> None:
             log.debug("self usage unavailable", exc_info=True)
             usage = ""
         m = build_dock_menu(root, SimpleNamespace(
-            usage=usage, pinned=pinned, language=_language_setting(),
+            usage=usage, pinned=pinned, language=_language_setting(), autostart=_autostart_on(),
             font_text=lambda: f"{font_scale:.0%}",
             open_live_chart=_open_live_chart, open_alerts=_open_alerts_panel,
             open_servers=_open_servers_panel, open_janitor=_open_janitor_panel,
@@ -450,7 +472,7 @@ def run_dock_main(args: object) -> None:
             open_spikes=_open_spikes_folder, toggle_pin=_toggle_pin,
             font_smaller=lambda: _bump_font(-0.1), font_larger=lambda: _bump_font(+0.1),
             set_language=_set_language, reset_position=_reset_position,
-            install_shortcut=_install_desktop_shortcut, exit=on_close,
+            toggle_autostart=_toggle_autostart, install_shortcut=_install_desktop_shortcut, exit=on_close,
         ))
         open_menu["menu"] = m
         m.popup(event.x_root, event.y_root)

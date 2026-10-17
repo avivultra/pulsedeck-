@@ -82,7 +82,7 @@ def work_area_at(widget: tk.Misc, x: int, y: int) -> tuple[int, int, int, int]:
 # Every icon the menus use. The first time Tk draws a symbol it searches the
 # installed fonts for it (~20 ms each); warm_up() pays that once, while the
 # user is not waiting, instead of on the first right-click (~0.3-0.7 s).
-ICONS = "📊🔔🖧🧹👻📁📂📌🌍⟲🖥🚪⏸✕🔇"
+ICONS = "📊🔔🖧🧹👻📁📂📌🌍⟲🚀🖥🚪⏸✕🔇"
 
 
 def warm_up(widget: tk.Misc) -> None:

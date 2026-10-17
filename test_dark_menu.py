@@ -215,15 +215,16 @@ class DockMenuTest(_TkTest):
         from dock_strip import build_dock_menu
         names = ["open_live_chart", "open_alerts", "open_servers", "open_janitor", "open_ghosts",
                  "open_history", "open_spikes", "toggle_pin", "font_smaller", "font_larger",
-                 "set_language", "reset_position", "install_shortcut", "exit"]
-        a = SimpleNamespace(usage="CPU 0.3% · RAM 98 MB", pinned=True, language="auto",
+                 "set_language", "reset_position", "toggle_autostart", "install_shortcut", "exit"]
+        a = SimpleNamespace(usage="CPU 0.3% · RAM 98 MB", pinned=True, language="auto", autostart=False,
                             font_text=lambda: "100%", **{n: mock.Mock() for n in names})
         m = build_dock_menu(self.root, a)
-        self.assertEqual(len(m.rows), 13)
-        # Rows in order: 7 commands, pin switch, font stepper, language choice, 3 commands.
+        self.assertEqual(len(m.rows), 14)
+        # Rows in order: 7 commands, pin switch, font stepper, language choice, a command,
+        # the Start-with-Windows switch, 2 commands.
         for i, name in ((0, "open_live_chart"), (1, "open_alerts"), (2, "open_servers"),
                         (3, "open_janitor"), (4, "open_ghosts"), (5, "open_history"), (6, "open_spikes"),
-                        (10, "reset_position"), (11, "install_shortcut"), (12, "exit")):
+                        (10, "reset_position"), (12, "install_shortcut"), (13, "exit")):
             m.closed = False                       # each run closes it; reuse the rows
             m.rows[i].activate()
             self.settle()
@@ -231,6 +232,8 @@ class DockMenuTest(_TkTest):
         m2 = build_dock_menu(self.root, a)
         m2.rows[7].activate()
         a.toggle_pin.assert_called_once()
+        m2.rows[11].activate()
+        a.toggle_autostart.assert_called_once()
         self.show(m2)
         m2._highlight(8)
         m2.win.event_generate("<Key>", keysym="plus")
@@ -248,11 +251,12 @@ class WarmUpTest(_TkTest):
         # An icon missing from ICONS costs ~20 ms on the first right-click.
         from dark_menu import ICONS
         from dock_strip import build_dock_menu
-        a = SimpleNamespace(usage="", pinned=False, language="auto", font_text=lambda: "100%",
+        a = SimpleNamespace(usage="", pinned=False, language="auto", autostart=True, font_text=lambda: "100%",
                             **{n: mock.Mock() for n in (
                                 "open_live_chart", "open_alerts", "open_servers", "open_janitor",
                                 "open_ghosts", "open_history", "open_spikes", "toggle_pin", "font_smaller",
-                                "font_larger", "set_language", "reset_position", "install_shortcut", "exit")})
+                                "font_larger", "set_language", "reset_position", "toggle_autostart",
+                                "install_shortcut", "exit")})
         m = build_dock_menu(self.root, a)
         icons = {r.widgets[1].cget("text") for r in m.rows} - {"Aa"}
         self.assertTrue(icons)

@@ -18,6 +18,7 @@ import i18n
 i18n.set_language("he")
 
 import app_paths  # noqa: E402
+import autostart  # noqa: E402
 import dependencies  # noqa: E402
 import monitor  # noqa: E402
 import single_instance  # noqa: E402
@@ -78,6 +79,82 @@ class StartModeTest(unittest.TestCase):
             text = ai_advisor.missing_key_text()
         self.assertIn("C:\\Users\\x\\AppData\\Local\\PulseDeck", text)
         self.assertNotIn("monitor.py", text)
+
+
+class _FakeWinreg:
+    HKEY_CURRENT_USER = "HKCU"
+    KEY_SET_VALUE = 2
+    REG_SZ = 1
+
+    def __init__(self):
+        self.store: dict[tuple[str, str], object] = {}
+
+    class _Key:
+        def __init__(self, path):
+            self.path = path
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_a):
+            return False
+
+    def OpenKey(self, _root, path, _reserved=0, _access=0):
+        return self._Key(path)
+
+    def CreateKeyEx(self, _root, path, _reserved=0, _access=0):
+        return self._Key(path)
+
+    def QueryValueEx(self, key, name):
+        try:
+            return self.store[(key.path, name)], self.REG_SZ
+        except KeyError:
+            raise FileNotFoundError(name) from None
+
+    def SetValueEx(self, key, name, _reserved, _type, value):
+        self.store[(key.path, name)] = value
+
+    def DeleteValue(self, key, name):
+        if self.store.pop((key.path, name), None) is None:
+            raise FileNotFoundError(name)
+
+
+class AutostartTest(unittest.TestCase):
+    def setUp(self):
+        self.reg = _FakeWinreg()
+        patches = [mock.patch.dict(sys.modules, {"winreg": self.reg}),
+                   mock.patch.object(sys, "platform", "win32")]
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def test_switching_on_and_off(self):
+        self.assertFalse(autostart.is_enabled())
+        autostart.set_enabled(True)
+        self.assertTrue(autostart.is_enabled())
+        self.assertEqual(self.reg.store[(autostart.RUN_KEY, "PulseDeck")], autostart.command())
+        autostart.set_enabled(False)
+        self.assertFalse(autostart.is_enabled())
+        self.assertEqual(self.reg.store, {})
+
+    def test_off_in_task_manager_reads_as_off_and_on_clears_it(self):
+        autostart.set_enabled(True)
+        self.reg.store[(autostart.APPROVED_KEY, "PulseDeck")] = b"\x03" + bytes(11)
+        self.assertFalse(autostart.is_enabled())
+        self.reg.store[(autostart.APPROVED_KEY, "PulseDeck")] = b"\x02" + bytes(11)
+        self.assertTrue(autostart.is_enabled())
+        self.reg.store[(autostart.APPROVED_KEY, "PulseDeck")] = b"\x03" + bytes(11)
+        autostart.set_enabled(True)
+        self.assertTrue(autostart.is_enabled())
+
+    def test_the_command_is_this_same_pulsedeck(self):
+        with mock.patch.object(sys, "frozen", True, create=True), \
+             mock.patch.object(sys, "executable", "C:\\Apps\\PulseDeck\\PulseDeck.exe"):
+            self.assertEqual(autostart.command(), '"C:\\Apps\\PulseDeck\\PulseDeck.exe"')
+        with mock.patch.object(sys, "frozen", False, create=True):
+            cmd = autostart.command()
+        self.assertIn(str(app_paths.CODE_DIR / "monitor.py"), cmd)
+        self.assertTrue(cmd.endswith("--dock --history --tray"))
 
 
 @unittest.skipUnless(os.name == "nt", "the named mutex is Windows-only")
