@@ -11,6 +11,9 @@ Every test also starts in Hebrew. The test modules set it once, at import,
 so a test that switched to "auto" changed the language for every test after
 it: Hebrew on the owner's PC, English on GitHub's Windows runners, where
 seven sweeper tests then failed.
+
+No test reaches the real Windows Credential Manager, where the owner's API
+key lives: each one gets an empty in-memory store.
 """
 
 import gc
@@ -18,11 +21,18 @@ import gc
 import pytest
 
 import i18n
+import secrets_store
 
 
 @pytest.fixture(autouse=True)
 def _start_in_hebrew():
     i18n.set_language("he")
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _no_real_secrets(monkeypatch):
+    monkeypatch.setattr(secrets_store, "_backend", secrets_store.MemoryStore())
     yield
 
 
