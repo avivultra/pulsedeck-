@@ -88,10 +88,19 @@ class IdleHogTargetsTest(unittest.TestCase):
             return idle_cleanup.idle_hog_targets(sampler)
 
     def test_idle_tray_app_is_offered(self):
-        targets, _ = self._run([_info(10, "Malwarebytes.exe", 266, None)],
-                               {10: {"name": "Malwarebytes.exe"}})
+        targets, _ = self._run([_info(10, "DSATray.exe", 266, None)],
+                               {10: {"name": "DSATray.exe"}})
         self.assertEqual([t.pid for t in targets], [10])
         self.assertEqual(targets[0].kind, "idle")
+
+    def test_security_software_is_never_offered(self):
+        # Malwarebytes' tray app is idle, alone and on no network — exactly
+        # what "Clean all" offers — and it was closed that way once.
+        names = ["Malwarebytes.exe", "MBAMService.exe", "avp.exe", "MsMpEng.exe"]
+        snap = [_info(10 + i, n, 266, None) for i, n in enumerate(names)]
+        table = {10 + i: {"name": n} for i, n in enumerate(names)}
+        targets, _ = self._run(snap, table)
+        self.assertEqual(targets, [])
 
     def test_recently_active_is_never_offered(self):
         targets, _ = self._run([_info(10, "app.exe", 500, 60.0)],

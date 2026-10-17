@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 import psutil
 
 from i18n import tr
+from load_actions import NEVER as _NEVER_TOUCHED
 
 log = logging.getLogger(__name__)
 
@@ -45,14 +46,14 @@ VERIFY_RSS_GROWTH_BYTES = 20 * MIB
 
 # Never offered as idle hogs even though they run as the user. The Windows
 # directory rule below already covers most OS processes; these live elsewhere.
+# Security software is the list "Ease the load" never touches: with only
+# Defender here, "Clean all" closed Malwarebytes on 2026-10-04.
 KEEP_NAMES: frozenset[str] = frozenset({
-    "msmpeng.exe", "mpdefendercoreservice.exe", "nissrv.exe",
-    "securityhealthsystray.exe", "securityhealthservice.exe",
     "nvcontainer.exe", "nvdisplay.container.exe", "nvidia share.exe",
     "igfxem.exe", "igfxhk.exe", "igfxtray.exe",
     "onedrive.exe", "dropbox.exe", "googledrivefs.exe",   # sync mid-upload
     "keepass.exe", "1password.exe", "bitwarden.exe",       # password vaults
-})
+}) | frozenset(f"{n}.exe" for n in _NEVER_TOUCHED["antivirus"])
 
 
 @dataclass(frozen=True)
