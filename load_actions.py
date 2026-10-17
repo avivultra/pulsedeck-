@@ -29,12 +29,12 @@ from pathlib import Path
 
 import psutil
 
+from app_paths import HISTORY_DIR
 from i18n import tr
 
 log = logging.getLogger(__name__)
 
-PROJECT_DIR = Path(__file__).resolve().parent
-STATE_PATH = PROJECT_DIR / "history" / "load_actions.json"
+STATE_PATH = HISTORY_DIR / "load_actions.json"
 WINDOW_SEC = 90             # "the last minute": the history keeps 30 s roll-ups
 TOP = 6                     # programs looked at, by CPU and by memory
 CLOSE_WAIT_SEC = 6.0        # how long a normal close may take

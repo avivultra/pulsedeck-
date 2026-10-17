@@ -8,6 +8,10 @@ __pycache__/
 .pytest_cache/
 .coverage
 
+# PyInstaller output (PulseDeck.spec) — the release workflow builds it
+build/
+dist/
+
 # IDE
 .vscode/
 .idea/

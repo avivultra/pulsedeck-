@@ -75,7 +75,8 @@ def read_gpu_temp() -> int | None:
 
 def _setup_logging() -> None:
     from logging.handlers import RotatingFileHandler
-    log_dir = Path(__file__).resolve().parent / "history"
+    from app_paths import HISTORY_DIR
+    log_dir = HISTORY_DIR
     log_dir.mkdir(parents=True, exist_ok=True)
     handler = RotatingFileHandler(log_dir / "fan_auto.log", maxBytes=256_000,
                                   backupCount=2, encoding="utf-8")

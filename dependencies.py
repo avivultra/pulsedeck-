@@ -36,10 +36,9 @@ FEATURE_REQUIREMENTS: dict[str, tuple[Requirement, ...]] = {
         Requirement("tray", "pystray", "pystray"),
         Requirement("tray", "PIL", "Pillow"),
     ),
-    "history": (
-        Requirement("history", "matplotlib", "matplotlib",
-                    note="Only needed for PNG chart rendering. CSV logging works without it."),
-    ),
+    # --history writes CSV only: PNG charts moved out to plot_history.py, which
+    # imports matplotlib itself. So the history mode needs nothing extra, and
+    # PulseDeck.exe ships without matplotlib.
 }
 
 

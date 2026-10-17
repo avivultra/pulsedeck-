@@ -1,7 +1,8 @@
 """Configuration loader/saver for the performance monitor.
 
-Stores user preferences in `config.json` next to monitor.py. CLI flags
-override values from the file; --save-config writes the merged result back.
+Stores user preferences in `config.json` next to monitor.py (PulseDeck.exe:
+in its data folder, see app_paths). CLI flags override values from the file;
+--save-config writes the merged result back.
 """
 from __future__ import annotations
 
@@ -11,9 +12,11 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from app_paths import DATA_DIR
+
 log = logging.getLogger(__name__)
 
-PROJECT_DIR = Path(__file__).resolve().parent
+PROJECT_DIR = DATA_DIR   # where config.json lives
 CONFIG_FILENAME = "config.json"
 
 DEFAULT_CONFIG: dict[str, Any] = {

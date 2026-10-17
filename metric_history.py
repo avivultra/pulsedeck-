@@ -10,10 +10,11 @@ import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app_paths import HISTORY_DIR
+
 log = logging.getLogger(__name__)
 
-PROJECT_DIR = Path(__file__).resolve().parent
-DEFAULT_HISTORY_DIR = PROJECT_DIR / "history"
+DEFAULT_HISTORY_DIR = HISTORY_DIR
 DEFAULT_REGULAR_DIR = DEFAULT_HISTORY_DIR / "regular"
 DEFAULT_SPIKES_DIR = DEFAULT_HISTORY_DIR / "spikes"
 DEFAULT_CSV_PATH = DEFAULT_REGULAR_DIR / "metrics.csv"

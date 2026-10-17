@@ -255,7 +255,7 @@ class ServerFoldersAreNeverClosedTest(unittest.TestCase):
     def test_server_dirs_are_read_without_creating_config(self):
         from unittest import mock
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch.object(pulsedeck_mcp, "PULSEDECK_DIR", Path(tmp)):
+            with mock.patch.object(pulsedeck_mcp, "CONFIG_DIR", Path(tmp)):
                 self.assertEqual(pulsedeck_mcp._server_dirs(), ())
                 self.assertFalse((Path(tmp) / "config.json").exists())
                 (Path(tmp) / "config.json").write_text(

@@ -15,6 +15,8 @@ import platform
 import sys
 from pathlib import Path
 
+from app_paths import is_frozen
+
 log = logging.getLogger(__name__)
 
 PROJECT_DIR = Path(__file__).resolve().parent
@@ -52,7 +54,13 @@ def _windows_install(shortcut_name: str = "PulseDeck") -> Path:
     # different Python that lacks psutil (py launcher, Microsoft Store Python).
     pythonw = Path(sys.executable).with_name("pythonw.exe")
     monitor_py = PROJECT_DIR / "monitor.py"
-    if pythonw.exists():
+    work_dir = PROJECT_DIR
+    if is_frozen():
+        # PulseDeck.exe itself: it starts in strip + tray mode without arguments.
+        target = Path(sys.executable)
+        arguments = ""
+        work_dir = target.parent
+    elif pythonw.exists():
         target = pythonw
         arguments = f'"{monitor_py}" --dock --history --tray'
     else:
@@ -61,7 +69,7 @@ def _windows_install(shortcut_name: str = "PulseDeck") -> Path:
         if not target.exists():
             raise FileNotFoundError(f"Launcher not found: {target}")
 
-    icon = ICON_ICO if ICON_ICO.exists() else None
+    icon = target if is_frozen() else (ICON_ICO if ICON_ICO.exists() else None)
     icon_arg = f"{icon},0" if icon else f"{os.environ.get('SystemRoot', 'C:\\Windows')}\\System32\\shell32.dll,173"
 
     shortcut_path = desktop / f"{shortcut_name}.lnk"
@@ -72,7 +80,7 @@ $shell = New-Object -ComObject WScript.Shell
 $lnk = $shell.CreateShortcut('{shortcut_path}')
 $lnk.TargetPath = '{target}'
 $lnk.Arguments = '{arguments}'
-$lnk.WorkingDirectory = '{PROJECT_DIR}'
+$lnk.WorkingDirectory = '{work_dir}'
 $lnk.WindowStyle = 7
 $lnk.IconLocation = '{icon_arg}'
 $lnk.Description = 'PulseDeck — Real-time CPU/RAM/Disk monitor with live charts, spike alerts, and process janitor'

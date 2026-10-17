@@ -15,6 +15,7 @@ import tkinter as tk
 from typing import Callable
 
 import i18n
+from app_paths import is_frozen
 from i18n import tr
 
 log = logging.getLogger(__name__)
@@ -240,6 +241,11 @@ def open_claude_panel(parent: tk.Misc, snapshot_fn: Callable[[], dict],
 
     if ai_advisor.is_configured():
         _ask(first_question)
+    elif is_frozen():
+        _show(ai_advisor.missing_key_text() + tr(
+            "\n\nאחר כך פתח שוב את החלון הזה. המפתח נשאר רק במחשב שלך.",
+            "\n\nThen open this window again. The key stays on your computer."), "dim")
+        send.configure(state="disabled")
     else:
         _show(tr(
             "כדי לחבר את Claude:\n\n"

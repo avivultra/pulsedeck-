@@ -6,7 +6,8 @@ snapshot: current CPU / memory / disk / temperature, the heaviest programs
 *by name* (same-name processes folded), and today's load events. Never command
 lines, paths, window titles or user names.
 
-Setup: put the key in a `.env` file next to monitor.py (see .env.example):
+Setup: put the key in a `.env` file next to monitor.py (see .env.example;
+PulseDeck.exe: in its data folder, see app_paths):
 
     ANTHROPIC_API_KEY=sk-ant-...
     # optional
@@ -25,12 +26,12 @@ import time
 from datetime import date
 from pathlib import Path
 
+from app_paths import DATA_DIR, HISTORY_DIR, is_frozen
 from i18n import tr
 
 log = logging.getLogger(__name__)
 
-PROJECT_DIR = Path(__file__).resolve().parent
-ENV_PATH = PROJECT_DIR / ".env"
+ENV_PATH = DATA_DIR / ".env"
 DEFAULT_MODEL = "claude-opus-5-5"
 # ---- Spending limits. One button press = at most one request; these make
 # sure nothing (a stuck button, a bug, a loop) can burn tokens without end.
@@ -41,7 +42,7 @@ MAX_QUESTION_CHARS = 500
 MAX_SNAPSHOT_CHARS = 8000
 DEFAULT_DAILY_REQUESTS = 20     # override: PULSEDECK_CLAUDE_DAILY_REQUESTS
 DEFAULT_DAILY_TOKENS = 60_000   # override: PULSEDECK_CLAUDE_DAILY_TOKENS
-USAGE_PATH = PROJECT_DIR / "history" / "claude_usage.json"
+USAGE_PATH = HISTORY_DIR / "claude_usage.json"
 
 _SYSTEM_PROMPT = """\
 You are the assistant inside PulseDeck, a small performance monitor on a \
@@ -129,6 +130,25 @@ def load_env(path: Path | None = None) -> None:
 def is_configured() -> bool:
     load_env()
     return bool(os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("ANTHROPIC_AUTH_TOKEN"))
+
+
+def missing_key_text() -> str:
+    """How to add the key. From source, .env.example sits beside monitor.py;
+    PulseDeck.exe has no such file, so name the exact folder instead."""
+    if is_frozen():
+        folder = ENV_PATH.parent
+        return tr(
+            "עדיין אין מפתח API. צור קובץ בשם .env בתיקייה הזאת:\n"
+            f"{folder}\n"
+            "וכתוב בו שורה אחת: ANTHROPIC_API_KEY= ואחריה המפתח שלך.",
+            "No API key yet. Create a file named .env in this folder:\n"
+            f"{folder}\n"
+            "with one line: ANTHROPIC_API_KEY= followed by your key.")
+    return tr(
+        "עדיין אין מפתח API. צור קובץ .env ליד monitor.py עם השורה\n"
+        "ANTHROPIC_API_KEY=sk-ant-...  (ראה .env.example)",
+        "No API key yet. Create a .env file next to monitor.py with the line\n"
+        "ANTHROPIC_API_KEY=sk-ant-...  (see .env.example)")
 
 
 def model_name() -> str:
@@ -317,11 +337,7 @@ def ask_claude(snapshot: dict, question: str | None = None, *, language: str = "
     AdvisorError with a user-facing message on any failure.
     """
     if not is_configured():
-        raise AdvisorError(tr(
-            "עדיין אין מפתח API. צור קובץ .env ליד monitor.py עם השורה\n"
-            "ANTHROPIC_API_KEY=sk-ant-...  (ראה .env.example)",
-            "No API key yet. Create a .env file next to monitor.py with the line\n"
-            "ANTHROPIC_API_KEY=sk-ant-...  (see .env.example)"))
+        raise AdvisorError(missing_key_text())
     try:
         import anthropic
     except ImportError as e:

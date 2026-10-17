@@ -43,6 +43,8 @@ import psutil
 PULSEDECK_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(PULSEDECK_DIR))
 
+from app_paths import DATA_DIR as CONFIG_DIR  # noqa: E402  (where config.json lives)
+
 SERVER_INFO = {"name": "pulsedeck", "version": "1.0"}
 SUPPORTED_PROTOCOLS = ("2025-06-18", "2025-03-26", "2024-11-05")
 _GB = 1024 ** 3
@@ -109,7 +111,7 @@ def _server_dirs() -> tuple[str, ...]:
     """
     from ghost_sweeper import normalize_dirs
     try:
-        with (PULSEDECK_DIR / "config.json").open(encoding="utf-8") as f:
+        with (CONFIG_DIR / "config.json").open(encoding="utf-8") as f:
             cfg = json.load(f)
         return normalize_dirs((cfg.get("sweeper") or {}).get("server_cwds") or [])
     except (OSError, ValueError, AttributeError):

@@ -573,10 +573,18 @@ def _setup_logging(level_name: str) -> None:
     )
 
 
+def default_argv(argv: list[str]) -> list[str]:
+    """PulseDeck.exe is started by a double-click, with no arguments and no
+    console to print to: give it the strip + tray + history mode the desktop
+    shortcut uses. From source, an empty command line keeps meaning console."""
+    from app_paths import is_frozen
+    return ["--dock", "--history", "--tray"] if is_frozen() and not argv else argv
+
+
 def main() -> None:
     cfg = app_config.load_config()
     parser = build_parser(cfg)
-    args = parser.parse_args()
+    args = parser.parse_args(default_argv(sys.argv[1:]))
     if args.interval <= 0:
         parser.error("--interval must be positive.")
     if args.plot_every < 0:
