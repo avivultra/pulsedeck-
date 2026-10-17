@@ -23,6 +23,18 @@ def _budget():
     return ai_advisor.Budget(Path(tempfile.mkdtemp()) / "usage.json")
 
 
+def _http():
+    """The HTTP library the installed anthropic SDK is built on, whose
+    Request and Response its errors take: httpx2 from SDK 1.15, httpx
+    before. httpx may be absent where the SDK no longer pulls it in."""
+    try:
+        import httpx2
+        return httpx2
+    except ImportError:
+        import httpx
+        return httpx
+
+
 def _usage(i=1000, o=500, **kw):
     return NS(input_tokens=i, output_tokens=o, **kw)
 
@@ -159,9 +171,9 @@ class AskClaudeSpendTest(unittest.TestCase):
 
     def test_an_error_answer_costs_nothing_a_timeout_keeps_the_worst_case(self):
         import anthropic
-        import httpx
-        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-        rejected = anthropic.AuthenticationError("no", response=httpx.Response(401, request=req), body=None)
+        http = _http()
+        req = http.Request("POST", "https://api.anthropic.com/v1/messages")
+        rejected = anthropic.AuthenticationError("no", response=http.Response(401, request=req), body=None)
         with self.assertRaises(ai_advisor.AdvisorError) as ctx:
             self._ask(mock.Mock(side_effect=rejected))
         self.assertIn("חיבור Claude וטלגרם", str(ctx.exception))   # where to fix it
@@ -172,9 +184,9 @@ class AskClaudeSpendTest(unittest.TestCase):
 
     def test_a_console_spend_limit_is_explained(self):
         import anthropic
-        import httpx
-        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
-        limited = anthropic.RateLimitError("limit", response=httpx.Response(429, request=req), body=None)
+        http = _http()
+        req = http.Request("POST", "https://api.anthropic.com/v1/messages")
+        limited = anthropic.RateLimitError("limit", response=http.Response(429, request=req), body=None)
         with self.assertRaises(ai_advisor.AdvisorError) as ctx:
             self._ask(mock.Mock(side_effect=limited))
         self.assertIn("Console", str(ctx.exception))
@@ -201,13 +213,13 @@ class KeyLookupTest(unittest.TestCase):
 
     def test_check_key_costs_nothing_and_reports_a_rejection(self):
         import anthropic
-        import httpx
+        http = _http()
         client = NS(models=NS(list=mock.Mock()))
         self.assertEqual(ai_advisor.check_key("k", client=client), (True, ""))
         client.models.list.assert_called_once_with(limit=1)
-        req = httpx.Request("GET", "https://api.anthropic.com/v1/models")
+        req = http.Request("GET", "https://api.anthropic.com/v1/models")
         client.models.list.side_effect = anthropic.AuthenticationError(
-            "no", response=httpx.Response(401, request=req), body=None)
+            "no", response=http.Response(401, request=req), body=None)
         ok, why = ai_advisor.check_key("k", client=client)
         self.assertIs(ok, False)
         self.assertIn("Console", why)
