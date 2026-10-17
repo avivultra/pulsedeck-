@@ -352,6 +352,22 @@ def build_snapshot(snap, groups, events, *, gpu_temp: float | None = None,
     }
 
 
+def snapshot_now(disk_path: str) -> dict:
+    """build_snapshot from what is running now, for a window that keeps no
+    data of its own (the strip's menu). Non-blocking: the process sampler
+    and the temperature readers already run in the background."""
+    from live_chart import _group_by_name, _read_today_spikes
+    from metric_history import DEFAULT_SPIKES_DIR
+    from monitor import collect_snapshot
+    from process_monitor import get_default_sampler, peek_default_sampler
+    from temperature_readings import read_gpu_temp_celsius
+
+    sampler = peek_default_sampler() or get_default_sampler()
+    groups = _group_by_name(sampler.snapshot())
+    return build_snapshot(collect_snapshot(disk_path), groups, _read_today_spikes(DEFAULT_SPIKES_DIR),
+                          gpu_temp=read_gpu_temp_celsius())
+
+
 # ---------------------------------------------------------------- request
 
 def _allowed_actions(snapshot: dict) -> dict[str, tuple[str, list[str]]]:

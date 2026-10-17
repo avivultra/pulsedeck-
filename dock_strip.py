@@ -78,6 +78,7 @@ def build_dock_menu(root: tk.Misc, a: SimpleNamespace):
     m = DarkMenu(root)
     m.add_header("PulseDeck", a.usage)
     m.add_group(tr("חלונות", "Windows"))
+    m.add_command(tr("שאל את Claude", "Ask Claude"), a.ask_claude, icon="✳")
     m.add_command(tr("מה קורה במחשב", "What's happening"), a.open_live_chart, icon="📊")
     m.add_command(tr("זיהוי עומס / התראות", "Load events / alerts"), a.open_alerts, icon="🔔")
     m.add_command(tr("שרתים פתוחים", "Open servers"), a.open_servers, icon="🖧")
@@ -428,6 +429,14 @@ def run_dock_main(args: object) -> None:
         except Exception:
             log.exception("Could not open the Claude & Telegram setup")
 
+    def _ask_claude() -> None:
+        try:
+            from ai_advisor import snapshot_now
+            from claude_panel import open_claude_panel
+            open_claude_panel(root, lambda: snapshot_now(disk_path))
+        except Exception:
+            log.exception("Could not open the Ask Claude panel from the dock")
+
     def _open_servers_panel() -> None:
         try:
             from server_scanner import open_servers_panel
@@ -474,7 +483,7 @@ def run_dock_main(args: object) -> None:
         m = build_dock_menu(root, SimpleNamespace(
             usage=usage, pinned=pinned, language=_language_setting(), autostart=_autostart_on(),
             font_text=lambda: f"{font_scale:.0%}",
-            open_live_chart=_open_live_chart, open_alerts=_open_alerts_panel,
+            ask_claude=_ask_claude, open_live_chart=_open_live_chart, open_alerts=_open_alerts_panel,
             open_servers=_open_servers_panel, open_janitor=_open_janitor_panel,
             open_ghosts=_open_ghost_panel, open_history=lambda: _open_hist_folder(csv_path),
             open_spikes=_open_spikes_folder, toggle_pin=_toggle_pin,

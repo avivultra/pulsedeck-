@@ -31,6 +31,30 @@ class PlainTextTest(unittest.TestCase):
                          "CPU is fine.\nNothing to do.")
 
 
+class SnapshotNowTest(unittest.TestCase):
+    """The strip's menu has no window data of its own: the snapshot comes
+    from the running sampler, folded by name, without starting anything."""
+
+    def test_folds_the_running_sampler_by_name(self):
+        from types import SimpleNamespace as NS
+
+        import ai_advisor
+        gb = 1024 ** 3
+        procs = [NS(name="chrome.exe", cpu_percent=3.0, rss_bytes=gb), NS(name="chrome.exe", cpu_percent=1.0,
+                 rss_bytes=gb), NS(name="node.exe", cpu_percent=0.5, rss_bytes=gb // 2)]
+        snap = NS(cpu_percent=12.0, cpu_logical=8, ram_percent=71.0, ram_used=11 * gb, ram_total=16 * gb,
+                  disk_percent=50.0, swap_percent=None, temp_celsius=None, battery_plugged=True)
+        with mock.patch("process_monitor.peek_default_sampler", return_value=NS(snapshot=lambda: procs)), \
+             mock.patch("process_monitor.get_default_sampler") as start, \
+             mock.patch("monitor.collect_snapshot", return_value=snap), \
+             mock.patch("live_chart._read_today_spikes", return_value=[]), \
+             mock.patch("temperature_readings.read_gpu_temp_celsius", return_value=None):
+            out = ai_advisor.snapshot_now("C:\\")
+        start.assert_not_called()
+        self.assertEqual(out["now"]["ram_percent"], 71.0)
+        self.assertEqual(out["top_memory"][0], {"name": "chrome.exe", "memory_mb": 2048, "count": 2})
+
+
 class AnswerLayoutTest(unittest.TestCase):
     def setUp(self):
         import tkinter as tk
