@@ -10,7 +10,7 @@ allowed-tools: Bash(python *)
 
 Run PulseDeck's command-line tool and summarise the answer for the user **in Hebrew**.
 
-Run it with the Bash tool: `python ...` is pre-approved there, so the read-only commands need no permission prompt. The chat approval below is still required before any action (`lower`, `restore`, `quit`, `force-quit`, `close`).
+Run it with the Bash tool, exactly as written below, starting with `python` — no prefix such as `PYTHONUTF8=1` (the script sets UTF-8 itself, and only a command that starts with `python` is pre-approved). That way the read-only commands need no permission prompt. The chat approval below is still required before any action (`lower`, `restore`, `quit`, `force-quit`, `close`).
 
 Script — always this full path, in double quotes (forward slashes work in Bash and PowerShell):
 `<PULSEDECK_DIR>/pulsedeck_mcp.py`

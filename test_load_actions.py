@@ -395,11 +395,14 @@ class CommandLineTest(unittest.TestCase):
     def test_load_report(self):
         import pulsedeck_mcp
         progs = [la.Program("chrome", 30.0, 2 * GB, 12, targets=[(1, 1.0, "chrome.exe", 1)], has_window=True),
-                 la.Program("MsMpEng", 9.0, GB, 1, never="antivirus")]
+                 la.Program("MsMpEng", 9.0, GB, 1, never="antivirus"),
+                 la.Program("pythonw", 2.0, GB, 3, never="server", skipped={"server": 2, "pulsedeck": 1})]
         with mock.patch.object(la, "heavy_programs", return_value=(progs, "history")):
             text = pulsedeck_mcp.tool_load({})
         self.assertIn("- chrome ×12: CPU 30.0%, memory 2.0 GB, has a window. Can: lower, close", text)
         self.assertIn("- MsMpEng: CPU 9.0%, memory 1.0 GB. Never touched: the antivirus", text)
+        # Mixed reasons are all named, so nobody has to guess which process is which.
+        self.assertIn("Never touched: 2 a server you keep running, 1 PulseDeck itself", text)
         self.assertIn("explicit yes", text)
 
 

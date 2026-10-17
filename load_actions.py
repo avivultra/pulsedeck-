@@ -536,6 +536,10 @@ def for_claude(progs: list[Program]) -> list[dict]:
     return out
 
 
+def _counted(skipped: dict) -> str:
+    return ", ".join(f"{k} {REASONS.get(r, ('', r))[1]}" for r, k in skipped.items())
+
+
 def report(progs: list[Program], source: str, window_sec: float = WINDOW_SEC) -> str:
     """Plain text for Claude Code (the /pulsedeck skill and the MCP tool)."""
     vm = psutil.virtual_memory()
@@ -555,10 +559,12 @@ def report(progs: list[Program], source: str, window_sec: float = WINDOW_SEC) ->
                 head += " (not close: " + REASONS["host"][1] + ")"
             if p.lowered:
                 head += ". Lowered earlier by PulseDeck"
+        elif len(p.skipped) > 1:                     # say each reason: "2 servers, 1 PulseDeck" - not a guess
+            head += ". Never touched: " + _counted(p.skipped)
         else:
             head += ". Never touched: " + (REASONS.get(p.never or "", ("", p.never or "not running now"))[1])
         if p.skipped and can:
-            head += ". Left out: " + ", ".join(f"{k} {REASONS.get(r, ('', r))[1]}" for r, k in p.skipped.items())
+            head += ". Left out: " + _counted(p.skipped)
         lines.append(head)
     lines.append("Every action is one program and needs the user's explicit yes for it, in the chat. "
                  "lower <name> / restore <name> change priority (reversible); quit <name> closes it like "
