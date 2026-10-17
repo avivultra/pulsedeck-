@@ -14,7 +14,7 @@ seven sweeper tests then failed.
 
 No test reaches the real Windows Credential Manager, where the owner's API
 key lives: each one gets an empty in-memory store. Nor the real spending
-ledger: each test gets its own, in a temp folder.
+ledger and Telegram report state: each test gets its own, in a temp folder.
 """
 
 import gc
@@ -24,6 +24,7 @@ import pytest
 import claude_spend
 import i18n
 import secrets_store
+import spend_reports
 
 
 @pytest.fixture(autouse=True)
@@ -42,6 +43,9 @@ def _no_real_secrets(monkeypatch):
 def _no_real_spending(monkeypatch, tmp_path):
     ledger = claude_spend.Ledger(tmp_path / "claude_spend.json", cap=lambda: 5.0)
     monkeypatch.setattr(claude_spend, "_ledger", ledger)
+    monkeypatch.setattr(spend_reports, "_reporter", spend_reports.Reporter(
+        ledger, send=lambda _text: False, connected=lambda: False,
+        state_path=tmp_path / "telegram_reports.json", background=False))
     yield
 
 

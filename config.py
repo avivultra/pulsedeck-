@@ -85,6 +85,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # month (claude_spend). The hard limit is the workspace's in the Console.
         "monthly_usd": 5.0,
     },
+    "telegram": {
+        # The owner's private chat with his bot (spend_reports). The bot token
+        # itself is in Windows Credential Manager, never here.
+        "chat_id": None,
+        "chat_name": None,
+    },
 }
 
 
