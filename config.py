@@ -80,6 +80,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "python.exe", "pythonw.exe", "code.exe",
         ],
     },
+    "claude": {
+        # Ask Claude stops before a question that could pass this, per calendar
+        # month (claude_spend). The hard limit is the workspace's in the Console.
+        "monthly_usd": 5.0,
+    },
 }
 
 
