@@ -598,6 +598,13 @@ def main() -> None:
 
     _setup_logging(args.log_level)
 
+    if args.dock or args.tray:
+        import single_instance
+        if not single_instance.acquire():
+            log.info("PulseDeck is already running; this copy exits")
+            single_instance.tell_already_running()
+            return
+
     if getattr(args, "install_shortcut", False):
         try:
             from install_shortcut import install_shortcut as _install

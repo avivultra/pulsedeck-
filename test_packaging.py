@@ -20,6 +20,7 @@ i18n.set_language("he")
 import app_paths  # noqa: E402
 import dependencies  # noqa: E402
 import monitor  # noqa: E402
+import single_instance  # noqa: E402
 
 
 class DataDirTest(unittest.TestCase):
@@ -77,6 +78,39 @@ class StartModeTest(unittest.TestCase):
             text = ai_advisor.missing_key_text()
         self.assertIn("C:\\Users\\x\\AppData\\Local\\PulseDeck", text)
         self.assertNotIn("monitor.py", text)
+
+
+@unittest.skipUnless(os.name == "nt", "the named mutex is Windows-only")
+class SingleInstanceTest(unittest.TestCase):
+    def _acquire(self, last_error: int, handle: int = 42) -> tuple[bool, mock.Mock]:
+        kernel32 = mock.Mock()
+        kernel32.CreateMutexW.return_value = handle
+        with mock.patch("ctypes.WinDLL", return_value=kernel32), \
+             mock.patch("ctypes.get_last_error", return_value=last_error), \
+             mock.patch.object(single_instance, "_handle", None):
+            return single_instance.acquire(), kernel32
+
+    def test_the_first_copy_runs(self):
+        ok, kernel32 = self._acquire(0)
+        self.assertTrue(ok)
+        kernel32.CloseHandle.assert_not_called()
+
+    def test_a_second_copy_steps_aside(self):
+        ok, kernel32 = self._acquire(single_instance.ERROR_ALREADY_EXISTS)
+        self.assertFalse(ok)
+        kernel32.CloseHandle.assert_called_once_with(42)
+
+    def test_a_failed_check_never_blocks_the_start(self):
+        ok, _ = self._acquire(5, handle=0)
+        self.assertTrue(ok)
+
+
+class AlreadyRunningTextTest(unittest.TestCase):
+    def test_the_hebrew_notice_opens_with_a_hebrew_letter(self):
+        # Its first letter sets the line's direction on Windows.
+        text = single_instance.already_running_text()
+        self.assertTrue("֐" <= text[0] <= "׿", text)
+        self.assertIn("PulseDeck", text)
 
 
 @unittest.skipUnless(os.name == "nt", "a .lnk is a Windows shortcut")
