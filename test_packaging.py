@@ -206,5 +206,14 @@ class ShortcutTest(unittest.TestCase):
         self.assertIn("$lnk.WorkingDirectory = 'C:\\Apps\\PulseDeck'", script)
 
 
+class SourceTest(unittest.TestCase):
+    def test_every_file_compiles_on_this_python(self):
+        # CI runs 3.11-3.13. A module no test imports used to slip through:
+        # install_shortcut.py had 3.12-only f-string syntax from May to October.
+        for path in sorted(app_paths.CODE_DIR.glob("*.py")):
+            with self.subTest(path.name):
+                compile(path.read_text(encoding="utf-8"), str(path), "exec")
+
+
 if __name__ == "__main__":
     unittest.main()

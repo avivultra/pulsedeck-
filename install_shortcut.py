@@ -70,7 +70,10 @@ def _windows_install(shortcut_name: str = "PulseDeck") -> Path:
             raise FileNotFoundError(f"Launcher not found: {target}")
 
     icon = target if is_frozen() else (ICON_ICO if ICON_ICO.exists() else None)
-    icon_arg = f"{icon},0" if icon else f"{os.environ.get('SystemRoot', 'C:\\Windows')}\\System32\\shell32.dll,173"
+    # Kept out of the f-string: a backslash inside {...} is a SyntaxError
+    # before Python 3.12, and Install.bat accepts 3.10 and 3.11.
+    system_root = os.environ.get("SystemRoot", "C:\\Windows")
+    icon_arg = f"{icon},0" if icon else f"{system_root}\\System32\\shell32.dll,173"
 
     shortcut_path = desktop / f"{shortcut_name}.lnk"
 
