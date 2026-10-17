@@ -100,7 +100,8 @@ look are all welcome as pull requests.
 - כדי שיעלה עם Windows: קליק ימני על הפס ואז "הפעל עם Windows". לחיצה נוספת מבטלת.
 - כדי להשתמש ב"שאל את Claude": קליק ימני על הפס ואז "חיבור Claude וטלגרם", ומדביקים את
   המפתח. הוא נשמר מוצפן ב-Windows, לא בקובץ. ההוצאה נעצרת לפני שעוברים את התקרה החודשית
-  (ברירת מחדל: 5 דולר), ובאותו חלון אפשר לחבר בוט טלגרם שמדווח כמה יצא.
+  (ברירת מחדל: 5 דולר), ובאותו חלון אפשר לחבר בוט טלגרם שמדווח כמה יצא. אחר כך שואלים
+  מהשורה הראשונה בתפריט: "✳ שאל את Claude".
 
 למפתחים, ובשביל `/pulsedeck` ב-Claude Code: מורידים את הקוד ולוחצים פעמיים על
 `Install.bat`. הוא מוצא את Python, מתקין את מה שצריך ויוצר קיצור בשם PulseDeck על שולחן
@@ -136,8 +137,11 @@ look are all welcome as pull requests.
   hour, today or yesterday when CPU stayed above 70 % or memory above 85 %
   for over half a minute, and names who worked hardest in those minutes from
   the per-program history; one click sends the summary to Ask Claude
-- **Ask Claude** — on demand only: sends program names and numbers (no command
-  lines or paths) and shows a plain-words answer. The key is pasted in the
+- **Ask Claude** — first row of the strip's menu, on demand only: sends program
+  names and numbers (no command lines or paths) and shows a plain-words answer.
+  It sees up to 15 programs, what Claude itself holds (quiet Claude Code
+  sessions, the shells they opened) and the leftovers "Clean all" would offer.
+  Hebrew answers are wrapped line by line so Windows keeps their order. The key is pasted in the
   strip's **Claude & Telegram setup** window and kept in Windows Credential
   Manager, encrypted with your login (`.env` still works for developers)
 - **A monthly cap in dollars** — $5 by default (`claude.monthly_usd` in
@@ -151,7 +155,9 @@ look are all welcome as pull requests.
   Numbers only; the bot token is kept like the API key
 - **Ease the load** — Claude may suggest up to three actions on the programs
   that loaded the PC over the last minute: *lower priority* (reversible) or
-  *close* (like clicking X). Each is a button; nothing runs until you confirm
+  *close* (like clicking X), or *clean up a program's leftovers* (only the
+  processes "Clean all" would offer, each proven idle again just before).
+  Each is a button; nothing runs until you confirm
   it, and a forced close is a second, separate confirmation. Windows, the
   antivirus, PulseDeck, editors, terminals, Claude and your servers are never
   offered (`load_actions.py`, shared with the `/pulsedeck load` command)
@@ -527,7 +533,7 @@ Typical footprint: **~90 MB RAM, ~1 % CPU** (measured on an 8-thread laptop).
 pytest
 ```
 
-352 unit tests across `test_monitor.py`, `test_ghost_sweeper.py`,
+372 unit tests across `test_monitor.py`, `test_ghost_sweeper.py`,
 `test_i18n.py`, `test_hardware.py`, `test_pulsedeck_mcp.py` (MCP protocol,
 the command line, UTF-8 pipes, and the never-close rules — fake processes
 apart from one sleep process the test starts and closes itself), the
@@ -537,8 +543,11 @@ folders, app parts, conversation titles — all on fake processes) and
 terminate outcomes, the freeze log, the WMI give-up), `test_dark_menu.py`
 (the strip's menu still offers every action; placement, keyboard; the
 confirm box) and `test_load_actions.py` (what may be done to each program,
-lower/restore, close then force, Claude's suggestions filtered to what is
-allowed, the window's confirm-first flow — all on fake processes) and
+lower/restore, close then force, cleaning leftovers, Claude's own share,
+Claude's suggestions filtered to what is allowed, the window's
+confirm-first flow — all on fake processes), `test_claude_panel.py` (an
+answer shows without Markdown, every Hebrew line embedded and within the
+window) and
 `test_packaging.py` (what `PulseDeck.exe` needs: the data folder, starting
 without arguments, one copy at a time, the Start-with-Windows switch — on a
 fake registry and a fake mutex), `test_secrets_store.py`,
