@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from unittest import mock
 
 import i18n
@@ -75,7 +75,8 @@ class StartModeTest(unittest.TestCase):
     def test_the_exe_names_the_folder_for_the_key(self):
         import ai_advisor
         with mock.patch.object(sys, "frozen", True, create=True), \
-             mock.patch.object(ai_advisor, "ENV_PATH", Path("C:\\Users\\x\\AppData\\Local\\PulseDeck\\.env")):
+             mock.patch.object(ai_advisor, "ENV_PATH",
+                               PureWindowsPath("C:\\Users\\x\\AppData\\Local\\PulseDeck\\.env")):
             text = ai_advisor.missing_key_text()
         self.assertIn("C:\\Users\\x\\AppData\\Local\\PulseDeck", text)
         self.assertNotIn("monitor.py", text)
