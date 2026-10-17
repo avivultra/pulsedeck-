@@ -94,6 +94,7 @@ def build_dock_menu(root: tk.Misc, a: SimpleNamespace):
                  a.language, a.set_language, icon="🌍")
     m.add_command(tr("אפס מיקום", "Reset position"), a.reset_position, icon="⟲")
     m.add_separator()
+    m.add_command(tr("חיבור Claude וטלגרם", "Claude & Telegram setup"), a.open_claude_setup, icon="🔑")
     m.add_switch(tr("הפעל עם Windows", "Start with Windows"), a.autostart, a.toggle_autostart, icon="🚀")
     m.add_command(tr("התקן קיצור בשולחן העבודה", "Install desktop shortcut"), a.install_shortcut, icon="🖥")
     m.add_command(tr("יציאה", "Exit"), a.exit, icon="🚪", danger=True)
@@ -420,6 +421,13 @@ def run_dock_main(args: object) -> None:
                       "Could not change Start with Windows. See history/monitor.log"),
                    warning=True)
 
+    def _open_claude_setup() -> None:
+        try:
+            from claude_setup import open_setup
+            open_setup(root)
+        except Exception:
+            log.exception("Could not open the Claude & Telegram setup")
+
     def _open_servers_panel() -> None:
         try:
             from server_scanner import open_servers_panel
@@ -472,7 +480,7 @@ def run_dock_main(args: object) -> None:
             open_spikes=_open_spikes_folder, toggle_pin=_toggle_pin,
             font_smaller=lambda: _bump_font(-0.1), font_larger=lambda: _bump_font(+0.1),
             set_language=_set_language, reset_position=_reset_position,
-            toggle_autostart=_toggle_autostart, install_shortcut=_install_desktop_shortcut, exit=on_close,
+            open_claude_setup=_open_claude_setup, toggle_autostart=_toggle_autostart, install_shortcut=_install_desktop_shortcut, exit=on_close,
         ))
         open_menu["menu"] = m
         m.popup(event.x_root, event.y_root)

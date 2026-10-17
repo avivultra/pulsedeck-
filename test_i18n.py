@@ -59,6 +59,14 @@ class I18nTest(unittest.TestCase):
         i18n.set_language("en")
         self.assertEqual(i18n.bidi("01:57 · CPU 82%"), "01:57 · CPU 82%")
 
+    def test_ltr_keeps_a_latin_token_whole_in_hebrew_only(self) -> None:
+        # Measured on Windows: "שלח /start" shows "start/" without it.
+        i18n.set_language("he")
+        self.assertEqual(i18n.ltr("/start"), i18n.LRE + "/start" + i18n.PDF)
+        self.assertEqual(i18n.ltr(""), "")
+        i18n.set_language("en")
+        self.assertEqual(i18n.ltr("/start"), "/start")
+
     def test_set_language_rejects_unsupported(self) -> None:
         with mock.patch.object(i18n, "_resolve", return_value="en"):
             i18n.set_language("fr")

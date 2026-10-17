@@ -15,7 +15,6 @@ import tkinter as tk
 from typing import Callable
 
 import i18n
-from app_paths import is_frozen
 from i18n import tr
 
 log = logging.getLogger(__name__)
@@ -98,7 +97,9 @@ def open_claude_panel(parent: tk.Misc, snapshot_fn: Callable[[], dict],
 
     def _show_usage() -> None:
         try:
-            usage_var.set(ai_advisor.default_budget().summary())
+            import claude_spend
+            usage_var.set(i18n.bidi(ai_advisor.default_budget().summary() + " · "
+                                    + claude_spend.default_ledger().summary()))
         except Exception:
             log.debug("Usage summary unavailable", exc_info=True)
     _show_usage()
@@ -239,24 +240,31 @@ def open_claude_panel(parent: tk.Misc, snapshot_fn: Callable[[], dict],
     send.configure(command=_on_send)
     entry.bind("<Return>", _on_send)
 
-    if ai_advisor.is_configured():
+    # No key yet: a button to the setup window. Once a key is saved there,
+    # this window asks its first question by itself.
+    waiting = {"key": not ai_advisor.is_configured()}
+
+    def _key_changed() -> None:
+        if not waiting["key"] or not win.winfo_exists() or not ai_advisor.is_configured():
+            return
+        waiting["key"] = False
+        for w in acts.winfo_children():
+            w.destroy()
+        send.configure(state="normal")
         _ask(first_question)
-    elif is_frozen():
-        _show(ai_advisor.missing_key_text() + tr(
-            "\n\nאחר כך פתח שוב את החלון הזה. המפתח נשאר רק במחשב שלך.",
-            "\n\nThen open this window again. The key stays on your computer."), "dim")
-        send.configure(state="disabled")
+
+    def _open_setup(_e=None) -> None:
+        from claude_setup import open_setup
+        open_setup(win, on_change=_key_changed)
+
+    if not waiting["key"]:
+        _ask(first_question)
     else:
-        _show(tr(
-            "כדי לחבר את Claude:\n\n"
-            "1. העתק את הקובץ .env.example לקובץ בשם .env (באותה תיקייה).\n"
-            "2. הדבק את המפתח שלך אחרי ANTHROPIC_API_KEY=\n"
-            "3. פתח שוב את החלון הזה.\n\n"
-            "המפתח נשאר רק במחשב שלך, והקובץ .env לא עולה ל-GitHub.",
-            "To connect Claude:\n\n"
-            "1. Copy .env.example to a file named .env (same folder).\n"
-            "2. Paste your key after ANTHROPIC_API_KEY=\n"
-            "3. Open this window again.\n\n"
-            "The key stays on your computer, and .env is never uploaded to GitHub."), "dim")
+        _show(ai_advisor.missing_key_text() + tr("\n\nהמפתח נשאר רק במחשב שלך.",
+                                                 "\n\nThe key stays on your computer."), "dim")
         send.configure(state="disabled")
+        key_btn = tk.Label(acts, text=i18n.bidi("🔑 " + tr("חבר מפתח", "Connect a key")), bg=ACCENT, fg="#ffffff",
+                           font=(FONT, 10, "bold"), padx=14, pady=4, cursor="hand2")
+        key_btn.pack(anchor=anchor)
+        key_btn.bind("<Button-1>", _open_setup)
     return win

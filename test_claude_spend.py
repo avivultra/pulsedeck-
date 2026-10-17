@@ -123,5 +123,97 @@ class LedgerTest(unittest.TestCase):
             self.assertEqual(claude_spend.configured_cap(), 5.0)
 
 
+class AskClaudeSpendTest(unittest.TestCase):
+    """ask_claude and the ledger together."""
+
+    def setUp(self):
+        self.led = _ledger()
+        p = mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"})
+        p.start()
+        self.addCleanup(p.stop)
+
+    def _ask(self, create, **kw):
+        client = NS(beta=NS(messages=NS(create=create)))
+        return ai_advisor.ask_claude({}, client=client, budget=_budget(), spend=self.led, **kw)
+
+    def test_an_answer_is_priced_by_the_model_that_gave_it(self):
+        resp = NS(stop_reason="end_turn", content=[NS(type="text", text="ok")],
+                  model="claude-sonnet-5-5", usage=_usage(1000, 500))
+        self._ask(mock.Mock(return_value=resp))
+        self.assertAlmostEqual(self.led.month_usd(), (1000 * 2 + 500 * 10) / 1e6)
+
+    def test_at_the_cap_nothing_is_sent(self):
+        self.led.settle(self.led.reserve(4.95), 4.95)
+        create = mock.Mock()
+        with self.assertRaises(ai_advisor.AdvisorError) as ctx:
+            self._ask(create)
+        create.assert_not_called()
+        self.assertIn("לתקרה החודשית", str(ctx.exception))
+
+    def test_the_daily_cap_gives_the_dollars_back(self):
+        budget = _budget()
+        with mock.patch.dict(os.environ, {"PULSEDECK_CLAUDE_DAILY_REQUESTS": "0"}):
+            with self.assertRaises(ai_advisor.AdvisorError):
+                ai_advisor.ask_claude({}, client=NS(), budget=budget, spend=self.led)
+        self.assertEqual(self.led.month_usd(), 0.0)
+
+    def test_an_error_answer_costs_nothing_a_timeout_keeps_the_worst_case(self):
+        import anthropic
+        import httpx
+        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        rejected = anthropic.AuthenticationError("no", response=httpx.Response(401, request=req), body=None)
+        with self.assertRaises(ai_advisor.AdvisorError) as ctx:
+            self._ask(mock.Mock(side_effect=rejected))
+        self.assertIn("חיבור Claude וטלגרם", str(ctx.exception))   # where to fix it
+        self.assertEqual(self.led.month_usd(), 0.0)
+        with self.assertRaises(ai_advisor.AdvisorError):
+            self._ask(mock.Mock(side_effect=anthropic.APITimeoutError(request=req)))
+        self.assertGreater(self.led.month_usd(), 0.05)
+
+    def test_a_console_spend_limit_is_explained(self):
+        import anthropic
+        import httpx
+        req = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+        limited = anthropic.RateLimitError("limit", response=httpx.Response(429, request=req), body=None)
+        with self.assertRaises(ai_advisor.AdvisorError) as ctx:
+            self._ask(mock.Mock(side_effect=limited))
+        self.assertIn("Console", str(ctx.exception))
+
+
+class KeyLookupTest(unittest.TestCase):
+    def test_the_stored_key_wins_and_reaches_the_client(self):
+        secrets_store.save(secrets_store.ANTHROPIC_KEY, "sk-ant-stored-0000000000")
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-from-env"}):
+            self.assertEqual(ai_advisor.api_key(), "sk-ant-stored-0000000000")
+            self.assertEqual(ai_advisor.key_source(), "store")
+            import anthropic
+            resp = NS(stop_reason="end_turn", content=[NS(type="text", text="ok")], usage=None)
+            fake = NS(beta=NS(messages=NS(create=mock.Mock(return_value=resp))))
+            with mock.patch.object(anthropic, "Anthropic", return_value=fake) as make:
+                ai_advisor.ask_claude({}, budget=_budget(), spend=_ledger())
+        self.assertEqual(make.call_args.kwargs["api_key"], "sk-ant-stored-0000000000")
+        self.assertEqual(make.call_args.kwargs["max_retries"], 0)
+
+    def test_without_a_stored_key_the_environment_still_works(self):
+        with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-from-env"}):
+            self.assertEqual(ai_advisor.api_key(), "sk-from-env")
+            self.assertEqual(ai_advisor.key_source(), "env")
+
+    def test_check_key_costs_nothing_and_reports_a_rejection(self):
+        import anthropic
+        import httpx
+        client = NS(models=NS(list=mock.Mock()))
+        self.assertEqual(ai_advisor.check_key("k", client=client), (True, ""))
+        client.models.list.assert_called_once_with(limit=1)
+        req = httpx.Request("GET", "https://api.anthropic.com/v1/models")
+        client.models.list.side_effect = anthropic.AuthenticationError(
+            "no", response=httpx.Response(401, request=req), body=None)
+        ok, why = ai_advisor.check_key("k", client=client)
+        self.assertIs(ok, False)
+        self.assertIn("Console", why)
+        client.models.list.side_effect = anthropic.APIConnectionError(request=req)
+        self.assertIsNone(ai_advisor.check_key("k", client=client)[0])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -701,6 +701,16 @@ def main() -> None:
         if args.dock or args.tray or not args.once:
             start_daily_rotation_timer(DEFAULT_REGULAR_DIR, weeks_to_keep=args.weeks_to_keep)
 
+    # Telegram reports on Claude spending: a thread that sleeps until the
+    # next summary is due, and does nothing at all until Telegram is set up.
+    if args.dock or args.tray:
+        try:
+            import spend_reports
+
+            spend_reports.default_reporter().start()
+        except Exception:
+            log.exception("Could not start the Telegram spending reports")
+
     if args.dock:
         psutil.cpu_percent(interval=0.1)
         from dock_strip import run_dock_main

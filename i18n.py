@@ -98,6 +98,16 @@ def bidi(text: str) -> str:
     return RLE + text + PDF if text and is_rtl() else text
 
 
+LRE = "‪"                # left-to-right embedding
+
+
+def ltr(token: str) -> str:
+    """Keep a Latin token whole inside a Hebrew line. Without it Windows moves
+    its leading or trailing punctuation to the other side: "/start" shows as
+    "start/", "@BotFather" as "BotFather@", "(…AbCd)" loses its brackets."""
+    return LRE + token + PDF if token and is_rtl() else token
+
+
 # ---- layout helpers (Tk option values) ----
 
 def ANCHOR() -> str:

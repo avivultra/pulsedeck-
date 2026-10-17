@@ -26,6 +26,9 @@ history/load_actions.json
 history/*.csv
 history/*.sqlite*
 history/claude_usage.json
+history/claude_spend.json
+history/telegram_reports.json
+history/*.tmp
 history/*.png
 history/spike_reports.md
 
