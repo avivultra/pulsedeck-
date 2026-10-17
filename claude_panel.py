@@ -187,7 +187,8 @@ def open_claude_panel(parent: tk.Misc, snapshot_fn: Callable[[], dict],
         def _work() -> None:
             try:
                 import load_actions
-                snapshot.setdefault("load_last_minute", load_actions.for_claude(load_actions.heavy_programs()[0]))
+                for key, value in load_actions.context_for_claude().items():
+                    snapshot.setdefault(key, value)
             except Exception:
                 log.exception("Could not see who loads the computer")
             actions: list = []

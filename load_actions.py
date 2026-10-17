@@ -521,6 +521,100 @@ def force_close(name: str) -> Result:
 
 # ------------------------------------------------------------------ for Claude
 
+CLAUDE_TOP = 10                 # programs "Ask Claude" looks at, by CPU and by memory
+SHELLS = {"pwsh", "powershell", "cmd", "bash", "sh", "conhost", "openconsole"}
+SESSION_IDLE_SEC = 3600         # a Claude Code session this quiet is probably not in use
+SHELL_OLD_SEC = 6 * 3600
+MIB = 1024 ** 2
+
+
+def _private_bytes(p: psutil.Process) -> int:
+    mi = p.memory_info()
+    return getattr(mi, "private", 0) or mi.rss
+
+
+def _claude_rows() -> list[dict]:
+    """Claude's processes and the shells they started, one dict each:
+    kind ("app" | "session" | "shell"), pid, memory, start time. The command
+    line is read here to tell a Claude Code session from the app's own
+    processes, and never leaves this function. Start times are read for
+    these few only: for every process on the machine that takes seconds."""
+    procs = [(p, p.info["pid"], p.info["ppid"], _short(p.info["name"] or "").lower())
+             for p in psutil.process_iter(["pid", "ppid", "name"])]
+    rows, claude = [], set()
+    for p, pid, _ppid, name in procs:
+        if name != "claude":
+            continue
+        try:
+            where = (p.exe() or "") + " " + " ".join(p.cmdline())
+            row = {"pid": pid, "memory": _private_bytes(p), "created": p.create_time()}
+        except (psutil.Error, OSError):
+            continue
+        claude.add(pid)
+        rows.append({"kind": "session" if "claude-code" in where.lower() else "app", **row})
+    for p, pid, ppid, name in procs:
+        if name in SHELLS and ppid in claude:
+            try:
+                rows.append({"kind": "shell", "pid": pid, "memory": _private_bytes(p), "created": p.create_time()})
+            except (psutil.Error, OSError):
+                continue
+    return rows
+
+
+def _idle_seconds_by_pid() -> dict[int, float]:
+    """How long each process has not used the CPU, as far as the background
+    sampler can tell (a lower bound); empty when it is not running."""
+    try:
+        from idle_cleanup import _idle_for
+        from process_monitor import peek_default_sampler
+        sampler = peek_default_sampler()
+        return {i.pid: _idle_for(i) for i in sampler.snapshot()} if sampler else {}
+    except Exception:
+        log.debug("Idle times unavailable", exc_info=True)
+        return {}
+
+
+def claude_usage(rows: list[dict], idle: dict[int, float], now: float | None = None) -> dict:
+    """What Claude itself holds, for "Ask Claude": names and numbers only.
+    PulseDeck never closes any of it; the user closes sessions in the app."""
+    now = time.time() if now is None else now
+    out: dict = {}
+    app = [r for r in rows if r["kind"] == "app"]
+    sessions = [r for r in rows if r["kind"] == "session"]
+    shells = [r for r in rows if r["kind"] == "shell"]
+    if app:
+        out["app"] = {"processes": len(app), "memory_mb": round(sum(r["memory"] for r in app) / MIB)}
+    if sessions:
+        quiet = [r for r in sessions if idle.get(r["pid"], 0.0) >= SESSION_IDLE_SEC]
+        out["code_sessions"] = {"count": len(sessions), "memory_mb": round(sum(r["memory"] for r in sessions) / MIB),
+                                "idle_over_1h": len(quiet),
+                                "idle_over_1h_memory_mb": round(sum(r["memory"] for r in quiet) / MIB)}
+    if shells:
+        out["shells_opened_by_claude"] = {
+            "count": len(shells), "memory_mb": round(sum(r["memory"] for r in shells) / MIB),
+            "older_than_6h": sum(1 for r in shells if now - r["created"] >= SHELL_OLD_SEC)}
+    if out:
+        out["never_touched"] = "claude"
+    return out
+
+
+def context_for_claude() -> dict:
+    """What the "Ask Claude" window adds to its snapshot, each part on its
+    own: one that fails is left out, the others still go."""
+    out: dict = {}
+    try:
+        out["load_last_minute"] = for_claude(heavy_programs(top=CLAUDE_TOP)[0])
+    except Exception:
+        log.exception("Could not see who loads the computer")
+    try:
+        usage = claude_usage(_claude_rows(), _idle_seconds_by_pid())
+        if usage:
+            out["claude_app"] = usage
+    except Exception:
+        log.exception("Could not measure Claude's own share")
+    return out
+
+
 def for_claude(progs: list[Program]) -> list[dict]:
     """The "Ask Claude" snapshot's view: names and numbers only."""
     out = []

@@ -52,6 +52,25 @@ class SnapshotTest(unittest.TestCase):
         self.assertEqual(s["top_memory"][0]["memory_mb"], 2048)
         self.assertEqual(s["load_events_today"][0]["suspects"], ["chrome.exe"])
 
+    def test_up_to_fifteen_programs(self):
+        groups = [(f"p{i}.exe", 1.0 + i, (i + 1) * 1024 ** 2, 1) for i in range(30)]
+        s = ai_advisor.build_snapshot(_snap(), groups, [])
+        self.assertEqual(len(s["top_cpu"]), 15)
+        self.assertEqual(s["top_memory"][0]["name"], "p29.exe")
+
+    def test_a_long_snapshot_is_cut_by_items_and_stays_valid_json(self):
+        import json
+        snap = {"now": {"cpu_percent": 5.0},
+                "top_memory": [{"name": f"program-{i}", "memory_mb": 1000 - i} for i in range(400)],
+                "load_events_today": [{"time": "10:00", "reason": "x"}]}
+        text = ai_advisor._fit(snap, limit=2000)
+        self.assertLessEqual(len(text), 2000)
+        back = json.loads(text)
+        self.assertEqual(back["now"], {"cpu_percent": 5.0})
+        self.assertEqual(back["top_memory"][0]["name"], "program-0")       # the heaviest stay
+        self.assertEqual(back["load_events_today"], snap["load_events_today"])
+        self.assertEqual(len(snap["top_memory"]), 400)                       # the caller's copy is untouched
+
 
 class AskClaudeTest(unittest.TestCase):
     def _client(self, response):

@@ -48,7 +48,7 @@ _MAX_TOKENS = 2000              # per answer, thinking included (answers are sho
 TIMEOUT_SEC = 60                # a request that hangs is abandoned, not retried
 MIN_GAP_SEC = 5                 # at least this long between two requests
 MAX_QUESTION_CHARS = 500
-MAX_SNAPSHOT_CHARS = 8000
+MAX_SNAPSHOT_CHARS = 12000      # about 4K tokens; longer lists are cut, the JSON stays whole
 DEFAULT_DAILY_REQUESTS = 20     # override: PULSEDECK_CLAUDE_DAILY_REQUESTS
 DEFAULT_DAILY_TOKENS = 60_000   # override: PULSEDECK_CLAUDE_DAILY_TOKENS
 USAGE_PATH = HISTORY_DIR / "claude_usage.json"
@@ -76,6 +76,16 @@ If the snapshot is not enough to know, say so instead of guessing. Write \
 plain text: no Markdown (no **, # headings or tables), the window shows it \
 as is. In Hebrew, avoid parentheses (write "node, 3 תהליכים, 420MB"): \
 Windows draws them the wrong way round in a Hebrew line.
+
+Do not stop at "it is not loaded": when memory is above about 60%, say \
+where it goes and roughly how much could be freed.
+
+"claude_app" (when present) is the Claude app itself: its own processes, \
+the Claude Code sessions (how many, their memory, how many have done nothing \
+for over an hour and what those hold) and the shells the sessions opened. \
+PulseDeck never closes Claude. When it holds a large share, say how much the \
+quiet sessions hold and that the user can close the ones they no longer need \
+from the Claude app; one of them is probably the session they work in.
 
 "load_last_minute" lists the programs that used the computer most over the \
 last minute, with what PulseDeck can do about each ("can"): "lower" lowers \
@@ -313,7 +323,7 @@ def default_budget() -> Budget:
 # ---------------------------------------------------------------- snapshot
 
 def build_snapshot(snap, groups, events, *, gpu_temp: float | None = None,
-                   top_n: int = 8) -> dict:
+                   top_n: int = 15) -> dict:
     """The data sent to Claude. Names and numbers only.
 
     `snap` is a monitor.Snapshot, `groups` the (name, cpu %, rss, count)
@@ -369,6 +379,19 @@ def snapshot_now(disk_path: str) -> dict:
 
 
 # ---------------------------------------------------------------- request
+
+def _fit(snapshot: dict, limit: int = MAX_SNAPSHOT_CHARS) -> str:
+    """The snapshot as JSON of at most `limit` characters that is still
+    valid JSON: the longest list loses its last (lightest) item, again and
+    again. Cutting the text itself would hand Claude a broken document."""
+    snap = {k: list(v) if isinstance(v, list) else v for k, v in snapshot.items()}
+    while True:
+        text = json.dumps(snap, ensure_ascii=False, separators=(",", ":"))
+        lists = [k for k, v in snap.items() if isinstance(v, list) and v]
+        if len(text) <= limit or not lists:
+            return text
+        snap[max(lists, key=lambda k: len(json.dumps(snap[k], ensure_ascii=False)))].pop()
+
 
 def _allowed_actions(snapshot: dict) -> dict[str, tuple[str, list[str]]]:
     """lower-case name -> (name, its "can" list), from the snapshot."""
@@ -444,7 +467,7 @@ def ask_claude(snapshot: dict, question: str | None = None, *, language: str = "
                                 "The 'anthropic' package is missing: pip install anthropic")) from e
 
     lang_name = "Hebrew" if language == "he" else "English"
-    snapshot_text = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))[:MAX_SNAPSHOT_CHARS]
+    snapshot_text = _fit(snapshot)
     question = (question or "").strip()[:MAX_QUESTION_CHARS]
     user_text = "Snapshot:\n" + snapshot_text
     user_text += "\n\nQuestion: " + (question or "What is going on with my computer right now?")

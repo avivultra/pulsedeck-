@@ -243,6 +243,45 @@ class CloseTest(_Fixture):
         self.assertEqual(r.text(english=True), "chrome closed, freeing about 1.0 GB.")
 
 
+class ClaudeUsageTest(unittest.TestCase):
+    """Claude's own share, for Ask Claude: counts and megabytes only."""
+
+    NOW = 1_000_000.0
+
+    def _rows(self):
+        mb = 1024 ** 2
+        return [{"kind": "app", "pid": 1, "memory": 500 * mb, "created": 0},
+                {"kind": "app", "pid": 2, "memory": 300 * mb, "created": 0},
+                {"kind": "session", "pid": 10, "memory": 470 * mb, "created": 0},
+                {"kind": "session", "pid": 11, "memory": 480 * mb, "created": 0},
+                {"kind": "session", "pid": 12, "memory": 450 * mb, "created": 0},
+                {"kind": "shell", "pid": 20, "memory": 30 * mb, "created": self.NOW - 7 * 3600},
+                {"kind": "shell", "pid": 21, "memory": 30 * mb, "created": self.NOW - 600}]
+
+    def test_quiet_sessions_and_old_shells_are_counted(self):
+        out = la.claude_usage(self._rows(), {10: 2 * 3600, 11: 3601, 12: 60}, now=self.NOW)
+        self.assertEqual(out, {
+            "app": {"processes": 2, "memory_mb": 800},
+            "code_sessions": {"count": 3, "memory_mb": 1400, "idle_over_1h": 2, "idle_over_1h_memory_mb": 950},
+            "shells_opened_by_claude": {"count": 2, "memory_mb": 60, "older_than_6h": 1},
+            "never_touched": "claude"})
+
+    def test_no_sampler_proves_no_session_quiet(self):
+        out = la.claude_usage(self._rows(), {}, now=self.NOW)
+        self.assertEqual(out["code_sessions"]["idle_over_1h"], 0)
+
+    def test_without_claude_nothing_is_added(self):
+        self.assertEqual(la.claude_usage([], {}), {})
+
+    def test_context_keeps_the_parts_that_worked(self):
+        with mock.patch.object(la, "heavy_programs", side_effect=RuntimeError("boom")), \
+             mock.patch.object(la, "_claude_rows", return_value=self._rows()), \
+             mock.patch.object(la, "_idle_seconds_by_pid", return_value={}):
+            out = la.context_for_claude()
+        self.assertNotIn("load_last_minute", out)
+        self.assertEqual(out["claude_app"]["code_sessions"]["count"], 3)
+
+
 class SuggestionsTest(unittest.TestCase):
     """The API channel: Claude's suggestions survive only where the snapshot allows them."""
 
