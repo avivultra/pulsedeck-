@@ -98,8 +98,9 @@ look are all welcome as pull requests.
 - ההגדרות וההיסטוריה נשמרות ב-`%LOCALAPPDATA%\PulseDeck`, לא בתיקיית התוכנה, כך שגרסה חדשה
   פשוט מחליפה את התיקייה.
 - כדי שיעלה עם Windows: קליק ימני על הפס ואז "הפעל עם Windows". לחיצה נוספת מבטלת.
-- כדי להשתמש ב"שאל את Claude" שמים בתיקייה הזו קובץ `.env` עם השורה
-  `ANTHROPIC_API_KEY=sk-ant-...`.
+- כדי להשתמש ב"שאל את Claude": קליק ימני על הפס ואז "חיבור Claude וטלגרם", ומדביקים את
+  המפתח. הוא נשמר מוצפן ב-Windows, לא בקובץ. ההוצאה נעצרת לפני שעוברים את התקרה החודשית
+  (ברירת מחדל: 5 דולר), ובאותו חלון אפשר לחבר בוט טלגרם שמדווח כמה יצא.
 
 למפתחים, ובשביל `/pulsedeck` ב-Claude Code: מורידים את הקוד ולוחצים פעמיים על
 `Install.bat`. הוא מוצא את Python, מתקין את מה שצריך ויוצר קיצור בשם PulseDeck על שולחן
@@ -136,7 +137,18 @@ look are all welcome as pull requests.
   for over half a minute, and names who worked hardest in those minutes from
   the per-program history; one click sends the summary to Ask Claude
 - **Ask Claude** — on demand only: sends program names and numbers (no command
-  lines or paths) and shows a plain-words answer. Key goes in `.env`
+  lines or paths) and shows a plain-words answer. The key is pasted in the
+  strip's **Claude & Telegram setup** window and kept in Windows Credential
+  Manager, encrypted with your login (`.env` still works for developers)
+- **A monthly cap in dollars** — $5 by default (`claude.monthly_usd` in
+  `config.json`). Each question is charged its worst case before it is sent
+  and its real cost when the answer arrives; one that could pass the cap is
+  not sent. It is an estimate from the list prices — for a hard limit, put the
+  key in its own Console workspace with a spend limit, which Anthropic enforces
+  itself. On top of it stay the daily caps of 20 questions and 60K tokens
+- **Telegram spending updates** (optional) — your own bot sends an alert past
+  50 %, 80 % and 100 % of the cap, a summary on Sunday and on the 1st.
+  Numbers only; the bot token is kept like the API key
 - **Ease the load** — Claude may suggest up to three actions on the programs
   that loaded the PC over the last minute: *lower priority* (reversible) or
   *close* (like clicking X). Each is a button; nothing runs until you confirm
@@ -328,7 +340,8 @@ and history logging. The exe is not code-signed yet, so the first start may show
 "Windows protected your PC": click **More info → Run anyway**.
 
 - Settings, history and `.env` live in `%LOCALAPPDATA%\PulseDeck`, never in the
-  program folder, so a new version simply replaces the folder.
+  program folder, so a new version simply replaces the folder. The API key and
+  the Telegram token are in Windows Credential Manager ("PulseDeck/...").
 - **Start with Windows** is a switch in the strip's right-click menu (one
   `HKCU\...\Run` value; it honours Task Manager's Startup apps toggle).
 - A second start shows "already running" and exits.
@@ -432,6 +445,11 @@ monitor.py            ← entry point; sets up logging, config, dispatchers
 ├── claude/skills/pulsedeck/SKILL.md ← the /pulsedeck skill (on demand)
 ├── ai_advisor.py     ← Ask Claude: snapshot + Messages API call
 ├── claude_panel.py   ← the Ask Claude window, with its suggested actions
+├── claude_setup.py   ← the Claude & Telegram setup window (key, token, chat)
+├── secrets_store.py  ← the key and the token in Windows Credential Manager
+├── claude_spend.py   ← the monthly cap in dollars (an estimate from list prices)
+├── spend_reports.py  ← Telegram alerts and summaries on that spending
+├── telegram_notify.py ← one-way Telegram Bot API calls (stdlib only)
 ├── load_actions.py   ← who loads the PC; lower / restore / close / force, never automatic
 ├── self_usage.py     ← PulseDeck's own CPU / memory, shown in the UI
 │
@@ -509,7 +527,7 @@ Typical footprint: **~90 MB RAM, ~1 % CPU** (measured on an 8-thread laptop).
 pytest
 ```
 
-303 unit tests across `test_monitor.py`, `test_ghost_sweeper.py`,
+352 unit tests across `test_monitor.py`, `test_ghost_sweeper.py`,
 `test_i18n.py`, `test_hardware.py`, `test_pulsedeck_mcp.py` (MCP protocol,
 the command line, UTF-8 pipes, and the never-close rules — fake processes
 apart from one sleep process the test starts and closes itself), the
@@ -523,7 +541,12 @@ lower/restore, close then force, Claude's suggestions filtered to what is
 allowed, the window's confirm-first flow — all on fake processes) and
 `test_packaging.py` (what `PulseDeck.exe` needs: the data folder, starting
 without arguments, one copy at a time, the Start-with-Windows switch — on a
-fake registry and a fake mutex).
+fake registry and a fake mutex), `test_secrets_store.py`,
+`test_claude_spend.py`, `test_spend_reports.py` and `test_claude_setup.py`
+(the key store, the monthly cap and when a request keeps or returns its
+charge, the Telegram alerts and summaries, and the setup window — no test
+touches the network, the real Credential Manager, the clipboard or the real
+spending files; `conftest.py` sees to the last three for every test).
 
 `test_ghost_sweeper.py` covers the sweeper (parent resolution under PID reuse,
 verdict classification, first-sighting estimates, cross-scan stability of

@@ -27,10 +27,16 @@ Python way is for developers and for the Claude Code helper.
     the program folder, so a newer version can replace the folder.
   - Start with Windows: right-click the strip → "Start with
     Windows". Click it again to stop.
-  - Ask Claude needs your own API key: put a file named .env with
-    the line  ANTHROPIC_API_KEY=sk-ant-...  in that same
-    %LOCALAPPDATA%\PulseDeck folder. (In Notepad, set "Save as
-    type" to "All files", or it saves .env.txt.)
+  - Ask Claude needs your own API key: right-click the strip →
+    "Claude & Telegram setup", paste the key, "Save and check".
+    Windows keeps it encrypted (Credential Manager), not in a file.
+    Spending stops before the monthly cap ($5 unless you change
+    "claude" → "monthly_usd" in config.json). For a hard limit,
+    create the key in its own Console workspace with a $5 spend
+    limit. The same window connects a Telegram bot for spending
+    alerts and weekly / monthly summaries.
+    (Developers: a .env file in %LOCALAPPDATA%\PulseDeck with
+    ANTHROPIC_API_KEY=sk-ant-... works too.)
   - Starting it twice just shows "already running".
 
   Done — the rest of this file is the Python way.
