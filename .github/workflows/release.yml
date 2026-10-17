@@ -1,0 +1,50 @@
+name: release
+
+# Builds PulseDeck.exe when a version tag is pushed (git tag v1.0.0 && git push
+# origin v1.0.0) and attaches the zip to a DRAFT release: nothing is public
+# until the owner opens the draft on GitHub and presses "Publish release".
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write   # create the draft release and upload the zip
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest pyinstaller==6.19.0
+
+      - name: Run tests
+        run: pytest -q
+
+      - name: Build PulseDeck.exe
+        run: pyinstaller --noconfirm PulseDeck.spec
+
+      - name: Zip the PulseDeck folder
+        shell: pwsh
+        env:
+          TAG: ${{ github.ref_name }}
+        run: Compress-Archive -Path dist/PulseDeck -DestinationPath "PulseDeck-$env:TAG-windows.zip"
+
+      - name: Create the draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: >
+          gh release create "$env:TAG" "PulseDeck-$env:TAG-windows.zip"
+          --draft --title "PulseDeck $env:TAG" --generate-notes

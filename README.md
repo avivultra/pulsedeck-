@@ -89,9 +89,21 @@ look are all welcome as pull requests.
 
 ### התקנה
 
-ב-Windows: מורידים את התיקייה ולוחצים פעמיים על `Install.bat`. הוא מוצא את Python,
-מתקין את מה שצריך ויוצר קיצור בשם PulseDeck על שולחן העבודה. הפירוט המלא (באנגלית)
-נמצא בהמשך.
+הכי פשוט, בלי Python: בעמוד
+[Releases](https://github.com/avivultra/pulsedeck-/releases) מורידים את
+`PulseDeck-<גרסה>-windows.zip`, פורסים את התיקייה למקום קבוע ולוחצים פעמיים על
+`PulseDeck.exe`. אם Windows מציג "Windows protected your PC", לוחצים "More info" ואז
+"Run anyway". הקובץ עוד לא חתום בתעודה בתשלום, וזה קורה רק בפעם הראשונה.
+
+- ההגדרות וההיסטוריה נשמרות ב-`%LOCALAPPDATA%\PulseDeck`, לא בתיקיית התוכנה, כך שגרסה חדשה
+  פשוט מחליפה את התיקייה.
+- כדי שיעלה עם Windows: קליק ימני על הפס ואז "הפעל עם Windows". לחיצה נוספת מבטלת.
+- כדי להשתמש ב"שאל את Claude" שמים בתיקייה הזו קובץ `.env` עם השורה
+  `ANTHROPIC_API_KEY=sk-ant-...`.
+
+למפתחים, ובשביל `/pulsedeck` ב-Claude Code: מורידים את הקוד ולוחצים פעמיים על
+`Install.bat`. הוא מוצא את Python, מתקין את מה שצריך ויוצר קיצור בשם PulseDeck על שולחן
+העבודה. הפירוט המלא (באנגלית) נמצא בהמשך.
 
 </div>
 
@@ -307,6 +319,25 @@ python monitor.py --dock --tray --history --save-config
 On first run, `config.json` is created from `config.example.json`-style defaults
 and lives next to `monitor.py`.
 
+### Windows — download, no Python
+
+From [Releases](https://github.com/avivultra/pulsedeck-/releases), download
+`PulseDeck-<version>-windows.zip`, unzip the `PulseDeck` folder somewhere it
+will stay and double-click `PulseDeck.exe` — it opens the strip, the tray icon
+and history logging. The exe is not code-signed yet, so the first start may show
+"Windows protected your PC": click **More info → Run anyway**.
+
+- Settings, history and `.env` live in `%LOCALAPPDATA%\PulseDeck`, never in the
+  program folder, so a new version simply replaces the folder.
+- **Start with Windows** is a switch in the strip's right-click menu (one
+  `HKCU\...\Run` value; it honours Task Manager's Startup apps toggle).
+- A second start shows "already running" and exits.
+- The `/pulsedeck` Claude Code helper needs the Python version below.
+
+Releases are built by `.github/workflows/release.yml` when a `v*` tag is
+pushed: tests, then `pyinstaller PulseDeck.spec`, then a **draft** release with
+the zip — published by hand after a look.
+
 ### Windows — one-click install
 
 Double-click **`Install.bat`**. It finds Python 3.10+ (the `py` launcher, the
@@ -324,8 +355,7 @@ never runs under an interpreter that lacks its packages.
 | `Start-Monitor.bat`        | Same, but a console window stays open |
 | `Start-Monitor-Debug.bat`  | Verbose logging visible in a console window |
 
-To launch at every boot, drop a shortcut to `Start-Monitor-Hidden.vbs` into
-`shell:startup` (Win+R → `shell:startup` → Enter → drag the shortcut in).
+To launch at every sign-in, right-click the strip → **Start with Windows**.
 
 ---
 
@@ -352,7 +382,9 @@ To launch at every boot, drop a shortcut to `Start-Monitor-Hidden.vbs` into
 
 ## Configuration
 
-All preferences live in `config.json`. CLI flags override config values.
+All preferences live in `config.json` — next to `monitor.py`, or in
+`%LOCALAPPDATA%\PulseDeck` for `PulseDeck.exe` (set `PULSEDECK_DATA_DIR` to move
+it). CLI flags override config values.
 See [`config.example.json`](config.example.json) for the full schema.
 
 Key sections:
@@ -376,6 +408,10 @@ Key sections:
 
 ```
 monitor.py            ← entry point; sets up logging, config, dispatchers
+├── app_paths.py      ← where settings and history live (code folder, or %LOCALAPPDATA% for the exe)
+├── single_instance.py ← one PulseDeck at a time (a named mutex)
+├── autostart.py      ← the Start-with-Windows switch (HKCU Run value)
+├── PulseDeck.spec    ← PyInstaller recipe for PulseDeck.exe (built by release.yml)
 ├── config.py         ← config.json load/save
 ├── dependencies.py   ← startup checks for psutil / pystray / matplotlib / PIL
 ├── metric_history.py ← CSV append, weekly rotation, archive pruning
@@ -473,7 +509,7 @@ Typical footprint: **~90 MB RAM, ~1 % CPU** (measured on an 8-thread laptop).
 pytest
 ```
 
-286 unit tests across `test_monitor.py`, `test_ghost_sweeper.py`,
+303 unit tests across `test_monitor.py`, `test_ghost_sweeper.py`,
 `test_i18n.py`, `test_hardware.py`, `test_pulsedeck_mcp.py` (MCP protocol,
 the command line, UTF-8 pipes, and the never-close rules — fake processes
 apart from one sleep process the test starts and closes itself), the
@@ -484,7 +520,10 @@ terminate outcomes, the freeze log, the WMI give-up), `test_dark_menu.py`
 (the strip's menu still offers every action; placement, keyboard; the
 confirm box) and `test_load_actions.py` (what may be done to each program,
 lower/restore, close then force, Claude's suggestions filtered to what is
-allowed, the window's confirm-first flow — all on fake processes).
+allowed, the window's confirm-first flow — all on fake processes) and
+`test_packaging.py` (what `PulseDeck.exe` needs: the data folder, starting
+without arguments, one copy at a time, the Start-with-Windows switch — on a
+fake registry and a fake mutex).
 
 `test_ghost_sweeper.py` covers the sweeper (parent resolution under PID reuse,
 verdict classification, first-sighting estimates, cross-scan stability of

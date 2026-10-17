@@ -2,7 +2,38 @@
   PulseDeck — How to install on a new computer
 ================================================================
 
-Hi! Here's everything you need to do:
+Hi! There are two ways in. The download needs nothing else; the
+Python way is for developers and for the Claude Code helper.
+
+----------------------------------------------------------------
+  EASIEST — download PulseDeck.exe (no Python needed)
+----------------------------------------------------------------
+
+  1. Open https://github.com/avivultra/pulsedeck-/releases and
+     download PulseDeck-<version>-windows.zip from the newest
+     release.
+  2. Unzip it somewhere it will stay, for example
+         C:\Users\<your-name>\Documents\PulseDeck\
+     (keep the whole PulseDeck folder: the .exe needs the
+     _internal folder next to it).
+  3. Double-click PulseDeck.exe.
+
+  Windows may say "Windows protected your PC" — the file is not
+  signed with a paid certificate yet. Click "More info", then
+  "Run anyway". It asks once.
+
+  - Your settings and history live in %LOCALAPPDATA%\PulseDeck
+    (paste that into Explorer's address bar to open it), not in
+    the program folder, so a newer version can replace the folder.
+  - Start with Windows: right-click the strip → "Start with
+    Windows". Click it again to stop.
+  - Ask Claude needs your own API key: put a file named .env with
+    the line  ANTHROPIC_API_KEY=sk-ant-...  in that same
+    %LOCALAPPDATA%\PulseDeck folder. (In Notepad, set "Save as
+    type" to "All files", or it saves .env.txt.)
+  - Starting it twice just shows "already running".
+
+  Done — the rest of this file is the Python way.
 
 ----------------------------------------------------------------
   STEP 1 — Make sure you have Python
@@ -67,11 +98,9 @@ After installation:
       • Clean unnecessary processes
       • Resize, move, pin, font size, etc.
 
-To start automatically when you log in:
-  1. Press Win+R
-  2. Type:   shell:startup
-  3. Press Enter
-  4. Drag a copy of the PulseDeck desktop shortcut into that folder.
+To start automatically when you log in: right-click the strip →
+"Start with Windows". Click it again to stop. (You can also turn it
+off in Task Manager → Startup apps.)
 
 ----------------------------------------------------------------
   Troubleshooting
@@ -88,16 +117,20 @@ To start automatically when you log in:
 
 > Dock doesn't appear
   - Make sure the monitor is running (check Task Manager for
-    `pythonw.exe`)
+    `pythonw.exe`, or `PulseDeck.exe` for the download)
   - Right-click any visible PulseDeck UI element → "Reset position"
   - If you only see the tray icon, that's also fine — the monitor
     is running and writing data.
 
 > Want to uninstall?
+  - If you turned on "Start with Windows", turn it off first
+    (right-click the strip) — it is the only registry entry
+    PulseDeck ever writes.
   - Delete the desktop shortcut "PulseDeck"
-  - Delete the folder (the one Install.bat lives in)
-  - That's it — PulseDeck is self-contained. No registry edits,
-    no installed services.
+  - Delete the folder (the one Install.bat or PulseDeck.exe
+    lives in). The .exe also kept its settings and history in
+    %LOCALAPPDATA%\PulseDeck — delete that folder too.
+  - That's it. No installed services.
 
 ----------------------------------------------------------------
   Source code & updates
