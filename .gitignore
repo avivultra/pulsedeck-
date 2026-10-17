@@ -17,6 +17,8 @@ __pycache__/
 history/regular/
 history/spikes/
 history/*.log
+history/*.log.*
+history/load_actions.json
 history/*.csv
 history/*.sqlite*
 history/claude_usage.json
