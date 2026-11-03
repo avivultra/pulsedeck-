@@ -389,8 +389,9 @@ def handle(msg: dict) -> dict | None:
 def _utf8_stdio() -> None:
     """MCP (and anything reading our output) speaks UTF-8; Windows pipes default
     to the ANSI code page (cp1255 on a Hebrew system), which garbles any
-    non-ASCII path in both directions."""
-    for stream in (sys.stdin, sys.stdout):
+    non-ASCII path in both directions. stderr too: the command line's error
+    messages quote folders, and the owner's own is Hebrew."""
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
         try:
             stream.reconfigure(encoding="utf-8", newline="\n")
         except (AttributeError, ValueError):
