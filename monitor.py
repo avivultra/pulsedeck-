@@ -12,6 +12,7 @@ Use --tray for the notification area, or --dock for a centered strip above the t
 from __future__ import annotations
 
 import argparse
+import ctypes
 import logging
 import os
 import sys
@@ -149,6 +150,37 @@ def _swap_percent() -> float | None:
     return sw.percent
 
 
+class _MemoryStatusEx(ctypes.Structure):
+    _fields_ = [("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+
+
+def _ram_fields(total: int, available: int) -> tuple[float, int, int]:
+    """(percent, used, total) the way psutil computes them on Windows."""
+    used = total - available
+    return (round(100.0 * used / total, 1) if total else 0.0), used, total
+
+
+def _ram() -> tuple[float, int, int]:
+    """Physical memory as (percent, used, total).
+
+    On Windows straight from GlobalMemoryStatusEx. psutil 7's
+    virtual_memory() reads the same total and available memory but also
+    computes fields nobody here shows: measured 2026-11-03, 7.5 ms (5.7 ms
+    of CPU) per call against 0.04 ms, and the dock asks every second on the
+    Tk thread. Elsewhere, or if the call fails, psutil."""
+    if os.name == "nt":
+        status = _MemoryStatusEx()
+        status.dwLength = ctypes.sizeof(status)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)) and status.ullTotalPhys:
+            return _ram_fields(int(status.ullTotalPhys), int(status.ullAvailPhys))
+    ram = psutil.virtual_memory()
+    return float(ram.percent), int(ram.used), int(ram.total)
+
+
 def _battery_fields() -> tuple[float | None, bool | None]:
     try:
         batt = psutil.sensors_battery()
@@ -161,7 +193,7 @@ def _battery_fields() -> tuple[float | None, bool | None]:
 
 def collect_snapshot(disk_path: str) -> Snapshot:
     cpu_usage = psutil.cpu_percent(interval=None)
-    ram = psutil.virtual_memory()
+    ram_percent, ram_used, ram_total = _ram()
     disk_percent: float | None = None
     disk_used: int | None = None
     disk_total: int | None = None
@@ -180,9 +212,9 @@ def collect_snapshot(disk_path: str) -> Snapshot:
 
     return Snapshot(
         cpu_percent=cpu_usage,
-        ram_percent=ram.percent,
-        ram_used=ram.used,
-        ram_total=ram.total,
+        ram_percent=ram_percent,
+        ram_used=ram_used,
+        ram_total=ram_total,
         disk_path=disk_path,
         disk_percent=disk_percent,
         disk_used=disk_used,

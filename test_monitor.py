@@ -58,6 +58,33 @@ class TestGibFormat(unittest.TestCase):
         self.assertIn("1.0", s)
 
 
+class TestRamReading(unittest.TestCase):
+    """The dock's memory figure, without psutil.virtual_memory() on Windows."""
+
+    def test_fields_match_psutils_formula(self) -> None:
+        gib = 1024**3
+        self.assertEqual(monitor._ram_fields(16 * gib, 4 * gib), (75.0, 12 * gib, 16 * gib))
+        self.assertEqual(monitor._ram_fields(3, 2), (33.3, 1, 3))
+        self.assertEqual(monitor._ram_fields(0, 0), (0.0, 0, 0))
+
+    def test_agrees_with_psutil(self) -> None:
+        import psutil
+        percent, used, total = monitor._ram()
+        ref = psutil.virtual_memory()
+        self.assertEqual(total, ref.total)
+        # Memory moves between the two reads; a few hundred MB at most.
+        self.assertLess(abs(used - ref.used), 512 * 1024**2)
+        self.assertLess(abs(percent - ref.percent), 5.0)
+
+    @unittest.skipUnless(monitor.os.name == "nt", "the fast path is Windows only")
+    def test_windows_does_not_call_virtual_memory(self) -> None:
+        from unittest import mock
+        with mock.patch("psutil.virtual_memory", side_effect=AssertionError("slow path")):
+            percent, used, total = monitor._ram()
+        self.assertGreater(total, 0)
+        self.assertTrue(0 < percent <= 100)
+
+
 class TestMetricHistory(unittest.TestCase):
     def test_append_writes_header(self) -> None:
         with tempfile.TemporaryDirectory() as d:
