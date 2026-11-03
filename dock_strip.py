@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 import os
 import threading
-import time
 import tkinter as tk
 from pathlib import Path
 from types import SimpleNamespace
@@ -23,6 +22,7 @@ from i18n import tr
 log = logging.getLogger(__name__)
 
 from monitor import HistoryLogger, collect_snapshot, disk_root_path, format_gib_usage, spike_reports_enabled
+from net_readings import read_net_rates
 from temperature_readings import read_gpu_memory_mib, read_gpu_temp_celsius
 
 
@@ -126,8 +126,6 @@ def run_dock_main(args: object) -> None:
         tray_icon = start_tray_daemon_visual(
             args, stop, history, csv_path, png_path, on_quit_render_final=False
         )
-
-    net_last: dict[str, float | int | None] = {"t": None, "sent": None, "recv": None}
 
     # Read persisted dock state (position + font scale + pin) — must be
     # available before _apply_pin_state() runs.
@@ -545,18 +543,10 @@ def run_dock_main(args: object) -> None:
             + tr("דיסק", "Disk") + f" {short}: {d_pct}"
         )
 
-        io = psutil.net_io_counters()
-        now = time.time()
-        net_txt = tr("רשת …", "Net …")
-        if net_last["t"] is not None and net_last["sent"] is not None and net_last["recv"] is not None:
-            dt = now - float(net_last["t"])
-            if dt > 0.05:
-                up = (io.bytes_sent - int(net_last["sent"])) / dt
-                dn = (io.bytes_recv - int(net_last["recv"])) / dt
-                net_txt = f"↑{_fmt_bps(up)}  ↓{_fmt_bps(dn)}"
-        net_last["t"] = now
-        net_last["sent"] = io.bytes_sent
-        net_last["recv"] = io.bytes_recv
+        # Read on net_readings' own thread: the call once froze this one for 48 s.
+        rates = read_net_rates()
+        net_txt = (f"↑{_fmt_bps(rates[0])}  ↓{_fmt_bps(rates[1])}" if rates is not None
+                   else tr("רשת …", "Net …"))
 
         extras: list[str] = []
         if snap.swap_percent is not None:

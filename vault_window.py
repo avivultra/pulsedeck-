@@ -174,7 +174,6 @@ class VaultWindow:
         self.full = False
         self.disk_path = disk_root_path()
         self._ppid_cache: dict[int, int | None] = {}
-        self._net_last: tuple[float, int] | None = None
         self._events_sig = None
         self._events: list[dict] = []
         self._ghosts: list = []
@@ -354,6 +353,7 @@ class VaultWindow:
 
     def refresh(self) -> None:
         from monitor import collect_snapshot
+        from net_readings import read_net_rates
         from self_usage import self_usage
         from temperature_readings import read_gpu_temp_celsius
 
@@ -373,13 +373,8 @@ class VaultWindow:
         self._groups = groups
         programs = pick_programs(groups)
 
-        now = time.monotonic()
-        io = psutil.net_io_counters()
-        total = io.bytes_sent + io.bytes_recv
-        rate = 0.0
-        if self._net_last is not None and now > self._net_last[0]:
-            rate = max(0.0, (total - self._net_last[1]) / (now - self._net_last[0]))
-        self._net_last = (now, total)
+        rates = read_net_rates()          # non-blocking, shared with the dock
+        rate = sum(rates) if rates is not None else 0.0
         gpu_t = read_gpu_temp_celsius()
         resources = [
             {"id": "cpu", "label": tr("מעבד", "CPU"), "value": snap.cpu_percent,
