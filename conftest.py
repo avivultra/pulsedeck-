@@ -15,9 +15,17 @@ seven sweeper tests then failed.
 No test reaches the real Windows Credential Manager, where the owner's API
 key lives: each one gets an empty in-memory store. Nor the real spending
 ledger and Telegram report state: each test gets its own, in a temp folder.
+
+Every temp folder a test makes lands in that test's tmp_path. The tests are
+unittest classes, which cannot take tmp_path as an argument, and many call
+tempfile.mkdtemp() without removing the result: each run left dozens of
+tmp* folders (spend.json, usage.json, .env...) in %TEMP%, 2,787 by
+2026-11-03, slowing the owner's logon. Pointing tempfile at tmp_path lets
+pytest delete them, keeping only the last three runs.
 """
 
 import gc
+import tempfile
 
 import pytest
 
@@ -30,6 +38,12 @@ import spend_reports
 @pytest.fixture(autouse=True)
 def _start_in_hebrew():
     i18n.set_language("he")
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _temp_folders_in_tmp_path(monkeypatch, tmp_path):
+    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     yield
 
 
