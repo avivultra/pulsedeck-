@@ -44,6 +44,8 @@ def _get_audit_logger() -> logging.Logger:
         )
         handler.setFormatter(logging.Formatter("%(asctime)s — %(message)s",
                                                datefmt="%Y-%m-%d %H:%M:%S"))
+        from ghost_sweeper import RedactingFilter
+        handler.addFilter(RedactingFilter())
         audit.addHandler(handler)
     except Exception:
         log.exception("Could not initialize janitor audit log")

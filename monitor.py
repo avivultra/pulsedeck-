@@ -597,6 +597,10 @@ def _setup_logging(level_name: str) -> None:
         # If the log file can't be opened (locked / permission), keep stderr only.
         pass
     handlers.append(logging.StreamHandler(sys.stderr))
+    # Every record is masked before it is written, at any log level.
+    from ghost_sweeper import RedactingFilter
+    for handler in handlers:
+        handler.addFilter(RedactingFilter())
     logging.basicConfig(
         level=level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",

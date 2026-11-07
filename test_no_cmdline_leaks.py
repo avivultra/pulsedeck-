@@ -179,5 +179,85 @@ class ScreenToggleIsScreenOnly(unittest.TestCase):
                 self.assertIsNone(process_modules.search((HERE / name).read_text(encoding="utf-8")))
 
 
+class EveryLogRecordIsMasked(unittest.TestCase):
+    """A logging.Filter on every handler PulseDeck writes through, so even a
+    DEBUG line that interpolates a command line, or an exception carrying
+    one, reaches the disk masked."""
+
+    SECRET = "pw" + "Zz81kq"
+    BARE = "sk-" + "ant-" + "Lm3N" * 8
+
+    def _write(self, handler, emit):
+        import io
+        import logging
+        stream = io.StringIO()
+        out = logging.StreamHandler(stream)
+        for f in handler.filters:
+            out.addFilter(f)
+        lg = logging.getLogger("pulsedeck.leaks-test")
+        lg.handlers, lg.propagate = [out], False
+        lg.setLevel(logging.DEBUG)
+        try:
+            emit(lg)
+        finally:
+            lg.handlers = []
+        return stream.getvalue()
+
+    def _assert_masked_by(self, handler):
+        def emit(lg):
+            lg.debug("spawned %s", f"node a.js --password={self.SECRET} {self.BARE}")
+            try:
+                raise RuntimeError(f"failed: python b.py --token {self.SECRET}")
+            except RuntimeError:
+                lg.exception("while starting %s", "b.py")
+        text = self._write(handler, emit)
+        self.assertIn("spawned node a.js", text)
+        self.assertIn("RuntimeError", text)
+        self.assertNotIn(self.SECRET, text)
+        self.assertNotIn(self.BARE, text)
+
+    def _real_handlers(self, make):
+        """Handlers as PulseDeck builds them, writing into a temp folder."""
+        tmp = Path(tempfile.mkdtemp())
+        with mock.patch("metric_history.DEFAULT_HISTORY_DIR", tmp):
+            return make(tmp)
+
+    def test_monitor_log(self):
+        import logging
+        import monitor
+        root = logging.getLogger()
+        saved = (root.handlers[:], root.level)
+        try:
+            with mock.patch.object(monitor, "DEFAULT_HISTORY_DIR", Path(tempfile.mkdtemp())):
+                monitor._setup_logging("DEBUG")
+            handlers = root.handlers[:]
+        finally:
+            for h in root.handlers:
+                if h not in saved[0]:
+                    h.close()
+            root.handlers, _ = saved[0], root.setLevel(saved[1])
+        self.assertTrue(handlers)
+        for h in handlers:
+            with self.subTest(type(h).__name__):
+                self._assert_masked_by(h)
+
+    def test_sweep_and_janitor_logs(self):
+        import janitor
+        for module, attr in ((ghost_sweeper, "_sweep_logger"), (janitor, "_audit_logger")):
+            with self.subTest(module.__name__):
+                saved = getattr(module, attr)
+                setattr(module, attr, None)
+                try:
+                    logger = self._real_handlers(
+                        lambda _tmp: (ghost_sweeper._get_sweep_logger() if module is ghost_sweeper
+                                      else janitor._get_audit_logger()))
+                    new = logger.handlers[-1]
+                    self._assert_masked_by(new)
+                finally:
+                    logger.removeHandler(new)
+                    new.close()
+                    setattr(module, attr, saved)
+
+
 if __name__ == "__main__":
     unittest.main()

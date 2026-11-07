@@ -283,6 +283,7 @@ def _get_sweep_logger() -> logging.Logger:
         )
         handler.setFormatter(logging.Formatter(
             "%(asctime)s — %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+        handler.addFilter(RedactingFilter())
         audit.addHandler(handler)
     except Exception:
         log.exception("Could not initialize the sweep log")
@@ -386,6 +387,25 @@ def redact_args(parts: list[str]) -> list[str]:
         out.append(MASK if after_flag and not part.startswith("-") else redact_cmdline(part))
         after_flag = bool(_SECRET_FLAG.match(part))
     return out
+
+
+class RedactingFilter(logging.Filter):
+    """Mask secrets in every record a handler writes, DEBUG included
+    (Start-Monitor-Debug.bat, log_level DEBUG): whatever a log call
+    interpolates - a command line, an exception text - reaches the disk
+    masked. Ignores the screen toggle."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:
+            return True                      # let logging report its own format error
+        record.msg, record.args = redact_cmdline(message), None
+        if record.exc_info and not record.exc_text:
+            record.exc_text = logging.Formatter().formatException(record.exc_info)
+        if record.exc_text:
+            record.exc_text = redact_cmdline(record.exc_text)
+        return True
 
 
 def secrets_are_redacted() -> bool:
