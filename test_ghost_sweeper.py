@@ -129,6 +129,43 @@ class TestCommandLineRedaction(unittest.TestCase):
             self._assert_masked(f"python app.py {flag}=ghp_secretvalue",
                                 "ghp_secretvalue")
 
+    # Fake values, assembled at run time so no secret-shaped text sits in
+    # the repository (and a pre-push scan has nothing to trip on).
+    BARE_SECRETS = {
+        "anthropic": "sk-" + "ant-api03-" + "Ab1_" * 10,
+        "openai": "sk-" + "proj" + "Xy9z" * 8,
+        "github": "gh" + "p_" + "A1b2C3d4" * 5,
+        "github_pat": "github" + "_pat_" + "11AB" * 10,
+        "slack": "xo" + "xb-" + "1234-5678-abcdEFGH",
+        "aws": "AK" + "IA" + "ABCDEFGHIJ234567",
+        "google": "AI" + "za" + "Sy" + "A1b2C3d4e5" * 3 + "xyz",
+        "jwt": "ey" + "JhbGciOiJIUzI1NiJ9" + ".ey" + "JzdWIiOiIxMjMifQ" + ".Sfl" + "KxwRJSMeKKF2QT4",
+        "telegram": "1234" + "56789:" + "AAH" + "x1y2z3" * 5 + "_-",
+    }
+
+    def test_bare_secrets_are_recognised_by_their_shape(self) -> None:
+        for kind, secret in self.BARE_SECRETS.items():
+            with self.subTest(kind):
+                self._assert_masked(f"python bot.py {secret} --verbose", secret)
+                self._assert_masked(f'node run.js "{secret}"', secret)
+
+    def test_url_query_secrets(self) -> None:
+        for param in ("token", "key", "apikey", "api_key", "access_token", "sig"):
+            with self.subTest(param):
+                out = self._r(f"curl https://api.example.com/v1?q=1&{param}=s3cr3tVal&x=2")
+                self.assertNotIn("s3cr3tVal", out)
+                self.assertIn("q=1", out)
+                self.assertIn("&x=2", out)
+
+    def test_look_alikes_are_untouched(self) -> None:
+        for cmd in ("python manage.py runserver 127.0.0.1:8000",
+                    "git checkout sk-feature-branch",
+                    "node app.js --monkey=banana",
+                    "ping 1234567890:short",
+                    "explorer.exe /select,E:" + chr(92) + "ghp_notes.txt"):
+            with self.subTest(cmd):
+                self.assertEqual(self._r(cmd), cmd)
+
     def test_case_insensitive(self) -> None:
         self._assert_masked("app --PASSWORD=Hunter2", "Hunter2")
 

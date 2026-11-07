@@ -334,14 +334,33 @@ _SECRET_KEY = (
 
 _REDACTORS: tuple[tuple[re.Pattern[str], str], ...] = (
     # --password=VALUE   --token:VALUE   PASSWORD=VALUE
-    (re.compile(rf"(?i)(\b-{{0,2}}{_SECRET_KEY}\s*[=:]\s*)(\S+)"), r"\1" + MASK),
+    # (not after ? or &: a URL query parameter is masked up to the next &
+    # below, so the rest of the URL stays readable)
+    (re.compile(rf"(?i)(?<![?&])(\b-{{0,2}}{_SECRET_KEY}\s*[=:]\s*)(\S+)"), r"\1" + MASK),
     # --password VALUE  (space separated; requires a leading dash so that the
     # word "password" in a file path is not mistaken for a flag)
     (re.compile(rf"(?i)(\s--?{_SECRET_KEY}\s+)(?!-)(\S+)"), r"\1" + MASK),
     # scheme://user:password@host — mask only the password portion
     (re.compile(r"(?i)\b([a-z][a-z0-9+.\-]*://[^\s:/@]+:)([^\s@]+)(@)"),
      r"\1" + MASK + r"\3"),
+    # URL query parameters: ?key=VALUE  &token=VALUE  &sig=VALUE
+    (re.compile(r"(?i)([?&](?:key|api[-_]?key|token|access[-_]?token|secret|password"
+                r"|sig|signature|auth)=)([^&\s#\"']+)"), r"\1" + MASK),
 )
+
+# A secret passed bare, with no flag name in front of it, is recognised by
+# its shape: the issuer's prefix plus enough random characters.
+_TAIL = r"(?![A-Za-z0-9_\-])"
+_SECRET_SHAPES: tuple[re.Pattern[str], ...] = tuple(re.compile(p) for p in (
+    r"\bsk-(?:ant-)?[A-Za-z0-9_\-]{20,}",                       # Anthropic / OpenAI
+    r"\b(?:ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{30,}" + _TAIL,      # GitHub tokens
+    r"\bgithub_pat_[A-Za-z0-9_]{30,}" + _TAIL,                  # GitHub fine-grained
+    r"\bxox[abposr]-[A-Za-z0-9\-]{10,}",                        # Slack
+    r"\bAKIA[0-9A-Z]{16}\b",                                    # AWS access key id
+    r"\bAIza[0-9A-Za-z_\-]{35}" + _TAIL,                        # Google API key
+    r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}",  # JWT
+    r"(?<![0-9])[0-9]{8,10}:[A-Za-z0-9_\-]{35}" + _TAIL,        # Telegram bot token
+))
 
 
 def redact_cmdline(text: str) -> str:
@@ -350,6 +369,8 @@ def redact_cmdline(text: str) -> str:
         return text
     for pattern, replacement in _REDACTORS:
         text = pattern.sub(replacement, text)
+    for shape in _SECRET_SHAPES:
+        text = shape.sub(MASK, text)
     return text
 
 
