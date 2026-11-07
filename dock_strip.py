@@ -90,6 +90,8 @@ def build_dock_menu(root: tk.Misc, a: SimpleNamespace):
     m.add_command(tr("ניקוי תהליכים מיותרים", "Clean up leftover processes"), a.open_janitor, icon="🧹")
     m.add_command(tr("תהליכים שננטשו", "Abandoned processes"), a.open_ghosts, icon="👻")
     m.add_command(tr("סגור שיחות Claude שקטות", "Close quiet Claude chats"), a.open_quiet_chats, icon="💬")
+    m.add_switch(tr("הצע לנקות כל 3 שעות", "Offer a cleanup every 3 hours"), a.cleanup_offer,
+                 a.toggle_cleanup_offer, icon="⏰")
     m.add_group(tr("תיעודים", "Records"))
     m.add_command(tr("תיעודים רגילים", "Metrics history"), a.open_history, icon="📁")
     m.add_command(tr("תיעודי חריגות", "Spike reports"), a.open_spikes, icon="📂")
@@ -458,6 +460,22 @@ def run_dock_main(args: object) -> None:
                       "Could not change Start with Windows. See history/monitor.log"),
                    warning=True)
 
+    def _cleanup_offer_on() -> bool:
+        try:
+            import cleanup_offer
+            return cleanup_offer.is_enabled()
+        except Exception:
+            log.debug("cleanup offer state unavailable", exc_info=True)
+            return True
+
+    def _toggle_cleanup_offer() -> None:
+        """The user's switch for the periodic offer (config.json)."""
+        try:
+            import cleanup_offer
+            cleanup_offer.set_enabled(not cleanup_offer.is_enabled())
+        except Exception:
+            log.exception("Could not change the cleanup offer switch")
+
     def _open_claude_setup() -> None:
         try:
             from claude_setup import open_setup
@@ -518,6 +536,7 @@ def run_dock_main(args: object) -> None:
             usage = ""
         m = build_dock_menu(root, SimpleNamespace(
             usage=usage, pinned=pinned, language=_language_setting(), autostart=_autostart_on(),
+            cleanup_offer=_cleanup_offer_on(), toggle_cleanup_offer=_toggle_cleanup_offer,
             font_text=lambda: f"{font_scale:.0%}",
             ask_claude=_ask_claude, open_live_chart=_open_live_chart, open_alerts=_open_alerts_panel,
             open_servers=_open_servers_panel, open_janitor=_open_janitor_panel,
@@ -540,6 +559,14 @@ def run_dock_main(args: object) -> None:
     # The menu's one-time symbol lookup (~0.25 s) happens here, a little after
     # start, instead of on the first right-click.
     root.after(8000, _warm_menu)
+
+    # Every few hours a corner card offers a cleanup; it never closes anything
+    # by itself (cleanup_offer). Idle between checks: one Tk timer, no thread.
+    try:
+        import cleanup_offer
+        cleanup_offer.start(root)
+    except Exception:
+        log.exception("Could not start the periodic cleanup offer")
 
     psutil.cpu_percent(interval=0.1)
     place_counter = 0

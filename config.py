@@ -96,6 +96,13 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "protected_path_words": [],
         "protected_chat_folders": [],
     },
+    "cleanup_offer": {
+        # Every few hours, a corner card offers what "Close quiet Claude
+        # chats" and "Clean all" would list. It only asks: nothing closes
+        # until the user presses a button (cleanup_offer).
+        "enabled": True,
+        "interval_hours": 3,
+    },
     "telegram": {
         # The owner's private chat with his bot (spend_reports). The bot token
         # itself is in Windows Credential Manager, never here.
