@@ -113,21 +113,21 @@ class SetupWindowTest(unittest.TestCase):
         w.tg_entry.insert(0, TOKEN)
         answers = []
         with mock.patch("telegram_notify.bot_name", return_value="@pd_bot"), \
-             mock.patch("telegram_notify.find_chat", return_value=(7, "Aviv")), \
+             mock.patch("telegram_notify.find_chat", return_value=(7, "Dana")), \
              mock.patch("telegram_notify.send") as send, \
              mock.patch.object(claude_setup, "confirm", side_effect=lambda *a, **k: answers.append(a)):
             self._click(w, "חבר ושלח בדיקה")
             self._wait_for(lambda: answers)
-            self.assertIn("Aviv", answers[0][2])                # the name, to confirm
+            self.assertIn("Dana", answers[0][2])                # the name, to confirm
             self.assertIsNone(self.cfg["telegram"]["chat_id"])   # nothing chosen yet
             answers[0][4](True)
             self._wait_for(lambda: send.called and "נשלחה" in self._text(w.tg_msg))
         self.assertEqual(secrets_store.load(secrets_store.TELEGRAM_TOKEN), TOKEN)
-        self.assertEqual(self.cfg["telegram"], {"chat_id": 7, "chat_name": "Aviv"})
+        self.assertEqual(self.cfg["telegram"], {"chat_id": 7, "chat_name": "Dana"})
         token, chat_id, text = send.call_args[0]
         self.assertEqual((token, chat_id), (TOKEN, 7))
         self.assertIn("החיבור הצליח", text)
-        self.assertIn("Aviv", self._text(w.tg_status))
+        self.assertIn("Dana", self._text(w.tg_status))
 
     def test_no_chat_yet_says_to_send_start(self):
         w = self._open()

@@ -8,12 +8,15 @@ from unittest import mock
 import secrets_store
 
 
+PASTED_KEY = "sk-" + "ant-api03-abcdefghijklmnop"   # fake, assembled
+
+
 class SecretsStoreTest(unittest.TestCase):
     def test_save_load_delete(self):
         name = secrets_store.ANTHROPIC_KEY
         self.assertIsNone(secrets_store.load(name))
-        secrets_store.save(name, "  sk-ant-api03-abcdefghijklmnop \n")    # pasted with spaces
-        self.assertEqual(secrets_store.load(name), "sk-ant-api03-abcdefghijklmnop")
+        secrets_store.save(name, f"  {PASTED_KEY} \n")    # pasted with spaces
+        self.assertEqual(secrets_store.load(name), PASTED_KEY)
         self.assertTrue(secrets_store.delete(name))
         self.assertIsNone(secrets_store.load(name))
         self.assertFalse(secrets_store.delete(name))

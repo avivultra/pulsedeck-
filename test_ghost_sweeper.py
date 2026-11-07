@@ -111,17 +111,17 @@ class TestCommandLineRedaction(unittest.TestCase):
                             "abc123XYZ")
 
     def test_basic_auth_pair(self) -> None:
-        self._assert_masked("ngrok http 8473 --basic-auth=aviv:Sup3rS3cret",
+        self._assert_masked("ngrok http 8473 --basic-auth=demo:Sup3rS3cret",
                             "Sup3rS3cret")
 
     def test_bare_env_style_assignment(self) -> None:
         self._assert_masked("set PASSWORD=letmein && run.bat", "letmein")
 
     def test_url_password_is_masked_but_host_survives(self) -> None:
-        out = self._r("psql postgres://aviv:pw123@localhost:5432/app")
+        out = self._r("psql postgres://demo:pw123@localhost:5432/app")
         self.assertNotIn("pw123", out)
         self.assertIn("localhost:5432/app", out)
-        self.assertIn("aviv", out)          # username is not a secret
+        self.assertIn("demo", out)          # username is not a secret
 
     def test_token_variants(self) -> None:
         for flag in ("--token", "--access-token", "--refresh_token",
@@ -175,12 +175,12 @@ class TestCommandLineRedaction(unittest.TestCase):
         self.assertEqual(self._r(cmd), cmd)
 
     def test_ordinary_command_line_is_untouched(self) -> None:
-        cmd = ("E:" + chr(92) + "Watchdog" + chr(92) + "python.exe "
+        cmd = ("E:" + chr(92) + "Guardian" + chr(92) + "python.exe "
                "-m http.server 8473 --bind 127.0.0.1")
         self.assertEqual(self._r(cmd), cmd)
 
     def test_path_containing_the_word_password_is_untouched(self) -> None:
-        cmd = ("ssh -i C:" + chr(92) + "Users" + chr(92) + "aviv" + chr(92)
+        cmd = ("ssh -i C:" + chr(92) + "Users" + chr(92) + "dana" + chr(92)
                + "my-password-notes" + chr(92) + "id_rsa host")
         self.assertEqual(self._r(cmd), cmd)
 
@@ -415,7 +415,7 @@ def _fake_ghost(**overrides):
 
     fields = dict(
         pid=1234, name="node.exe", exe="C:/node.exe",
-        cmdline="node server.js", cwd="E:/proj", username="aviv",
+        cmdline="node server.js", cwd="E:/proj", username="demo",
         create_time=1000.0, age_seconds=7200.0,
         parent_pid=99, parent_name="claude.exe", parent_alive=False,
         orphaned_for_seconds=3600.0, orphan_time_is_lower_bound=False,
@@ -535,7 +535,7 @@ class TestSweepLog(unittest.TestCase):
 
         import ghost_sweeper as gs
 
-        secret_cmd = "ngrok http 8473 --basic-auth=aviv:Sup3rS3cret"
+        secret_cmd = "ngrok http 8473 --basic-auth=demo:Sup3rS3cret"
         # Even with display masking explicitly turned OFF:
         with patch.object(gs, "secrets_are_redacted", return_value=False):
             gs.GhostSweeper()._record_sweep([_fake_ghost(cmdline=secret_cmd)])

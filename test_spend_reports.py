@@ -200,11 +200,11 @@ class TelegramClientTest(unittest.TestCase):
     def test_the_latest_private_chat_is_found(self):
         updates = [{"message": {"chat": {"id": 1, "type": "private", "first_name": "Old"}}},
                    {"message": {"chat": {"id": -5, "type": "group", "title": "G"}}},
-                   {"message": {"chat": {"id": 7, "type": "private", "first_name": "Aviv",
-                                         "username": "aviv"}}},
+                   {"message": {"chat": {"id": 7, "type": "private", "first_name": "Dana",
+                                         "username": "dana"}}},
                    {"edited_message": {}}]
         with mock.patch.object(telegram_notify, "urlopen", return_value=_ok(updates)):
-            self.assertEqual(telegram_notify.find_chat(TOKEN), (7, "Aviv (@aviv)"))
+            self.assertEqual(telegram_notify.find_chat(TOKEN), (7, "Dana (@dana)"))
         with mock.patch.object(telegram_notify, "urlopen", return_value=_ok([])):
             self.assertIsNone(telegram_notify.find_chat(TOKEN))
 

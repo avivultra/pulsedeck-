@@ -37,10 +37,38 @@ class ScanText(unittest.TestCase):
     def test_personal_paths_and_names(self):
         for text in ("C:\\Users\\" + NAMES[0] + "\\AppData\\x.log",
                      "C:/Users/" + NAMES[0].lower() + "/x",
-                     "%TEMP% is C:\\Users\\" + NAMES[1] + "\\AppData\\Local\\Temp",
-                     "E:\\flow" + "-secrets\\telegram.txt"):
+                     "%TEMP% is C:\\Users\\" + NAMES[1] + "\\AppData\\Local\\Temp"):
             with self.subTest(text):
                 self.assertTrue(_scan(text))
+
+    def test_any_real_looking_user_folder(self):
+        # Not this machine's name: any name that is not a placeholder.
+        self.assertTrue(_scan(r"log = r'C:" + r"\Users\someone\AppData\x.log'"))
+        for fine in (r"C:\Users\<your-name>\Documents", r"C:\Users\you\AppData", r"C:\Users\x\a.lnk"):
+            with self.subTest(fine):
+                self.assertEqual(_scan(fine), [])
+
+    def test_absolute_paths_outside_the_neutral_examples(self):
+        for text in ("cwd = r'E:" + r"\clientSite\src'", "E:/" + "myStuff/x.py",
+                     'open("D:' + '\\\\Taxes\\\\2026.pdf")'):
+            with self.subTest(text):
+                self.assertTrue(_scan(text))
+        for fine in (r"E:\proj\server.js", r"C:\Program Files\nodejs\node.exe", r"C:\Windows\System32",
+                     r"E:\demo\site", "E:\\", "https://example.com/a:b", r"[^\s:/@]+:)"):
+            with self.subTest(fine):
+                self.assertEqual(_scan(fine), [])
+
+    def test_private_denylist_lives_outside_the_repo(self):
+        listed = Path(tempfile.mkdtemp()) / "publish_denylist.txt"
+        listed.write_text("# the owner's project names\nSecretProj" + "ect\n  side-gig  # client\n\n",
+                          encoding="utf-8")
+        words = secret_scan.denylist(listed)
+        self.assertEqual(words, ("SecretProj" + "ect", "side-gig"))
+        self.assertTrue(secret_scan.scan_text("cwd E:/demo/secretproj" + "ectV2", "f", (), words))
+        self.assertTrue(secret_scan.scan_text("title = 'Side-Gig chat'", "f", (), words))
+        self.assertEqual(secret_scan.scan_text("title = 'chat A'", "f", (), words), [])
+        self.assertEqual(secret_scan.denylist(listed.with_name("absent.txt")), ())
+        self.assertFalse(str(secret_scan.denylist_path()).startswith(str(HERE)))
 
     def test_emails(self):
         self.assertTrue(_scan("contact: someone.real@" + "gmail.com"))
@@ -50,7 +78,7 @@ class ScanText(unittest.TestCase):
                 self.assertEqual(_scan(f"Co-Authored-By: X <{fine}>"), [])
 
     def test_ordinary_code_passes(self):
-        for text in ('C:\\Users\\a\\AppData\\Local\\Temp\\flow_isolated_7',
+        for text in ('C:\\Users\\a\\AppData\\Local\\Temp\\alp_isolated_7',
                      "git checkout sk-feature-branch",
                      "host = '127.0.0.1:8000'",
                      "DanaQuest = 1  # a longer word is not the name",
@@ -143,18 +171,49 @@ class PrePushOnARealRepository(unittest.TestCase):
 
 
 class PublishedFilesStayGeneric(unittest.TestCase):
+    def test_every_tracked_file_passes_the_publish_scan(self):
+        """The whole repository as it is now: no key shapes, no real user
+        folder, no absolute path outside the neutral examples, no personal
+        e-mail, no private file tracked - and, on the owner's machine, none of
+        his private words or his user name. CI runs the generic checks only."""
+        found = secret_scan.tracked_findings(secret_scan.personal_names(), secret_scan.denylist(),
+                                             cwd=str(HERE))
+        self.assertEqual([str(f) for f in found], [])
+
+    def test_the_tracked_scan_catches_a_personal_fixture(self):
+        # A copy of the repository's own scan on a throwaway repo with one bad fixture.
+        root = Path(tempfile.mkdtemp())
+        subprocess.run(["git", "init", "-q", str(root)], check=True)
+        (root / "test_x.py").write_text("CWD = r'C:" + r"\clientWork\shop'\n", encoding="utf-8")
+        (root / "config.json").write_text("{}\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-f", "test_x.py", "config.json"], cwd=root, check=True)
+        found = [str(f) for f in secret_scan.tracked_findings((), (), cwd=str(root))]
+        self.assertEqual(len(found), 2, found)
+
     def test_example_config_has_placeholder_protection_lists(self):
         import json
         example = json.loads((HERE / "config.example.json").read_text(encoding="utf-8"))
         claude = example["claude"]
         for key in ("protected_chat_words", "protected_path_words", "protected_chat_folders"):
             self.assertIn(key, claude)
-        self.assertNotIn("flowstream", json.dumps(claude).lower())
+            self.assertTrue(all("my-important-project" in v.lower() or v == "MyImportantProject"
+                                for v in claude[key]), claude[key])
 
-    def test_the_hook_runs_the_scan(self):
-        hook = (HERE / "githooks" / "pre-push").read_text(encoding="utf-8")
-        self.assertTrue(hook.startswith("#!/bin/sh"))
-        self.assertIn("secret_scan.py --pre-push", hook)
+    def test_the_hooks_run_the_scan(self):
+        for name, mode in (("pre-push", "--pre-push"), ("pre-commit", "--staged")):
+            with self.subTest(name):
+                hook = (HERE / "githooks" / name).read_text(encoding="utf-8")
+                self.assertTrue(hook.startswith("#!/bin/sh"))
+                self.assertIn(f"secret_scan.py {mode}", hook)
+
+    def test_workflow_actions_are_pinned_to_a_commit(self):
+        import re
+        for wf in sorted((HERE / ".github" / "workflows").glob("*.yml")):
+            text = wf.read_text(encoding="utf-8")
+            with self.subTest(wf.name):
+                self.assertIn("permissions:", text)
+                for ref in re.findall(r"uses:\s*([^\s#]+)", text):
+                    self.assertRegex(ref, r"@[0-9a-f]{40}$", f"{ref} is not pinned to a full SHA")
 
 
 if __name__ == "__main__":

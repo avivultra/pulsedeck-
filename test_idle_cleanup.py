@@ -59,7 +59,7 @@ class _FakeProc:
         return SimpleNamespace(rss=self._d.get("rss", 0))
 
     def username(self):
-        return self._d.get("user", "PC\\aviv")
+        return self._d.get("user", "PC\\dana")
 
     def exe(self):
         return self._d.get("exe", "C:\\Program Files\\App\\app.exe")
@@ -84,7 +84,7 @@ class IdleHogTargetsTest(unittest.TestCase):
                                side_effect=lambda pid: (ancestors or {}).get(pid, [])), \
              mock.patch.object(idle_cleanup, "_windows_dir", return_value=WIN), \
              mock.patch("ghost_sweeper._is_current_user",
-                        side_effect=lambda u: u.endswith("aviv")):
+                        side_effect=lambda u: u.endswith("dana")):
             return idle_cleanup.idle_hog_targets(sampler)
 
     def test_idle_tray_app_is_offered(self):

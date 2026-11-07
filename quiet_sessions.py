@@ -92,7 +92,7 @@ class Protection:
 
     * title_words: its title contains one (any case);
     * path_words: its folder's path contains one (any case), wherever it is
-      (E:\\flow-hub, %TEMP%\\flow_isolated_7, ...);
+      (E:\\alp-hub, %TEMP%\\alp_isolated_7, ...);
     * folders: its folder is one of these, or inside one (for folders whose
       path carries no such word)."""
     title_words: tuple[str, ...] = ()

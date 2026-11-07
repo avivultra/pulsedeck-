@@ -1,0 +1,9 @@
+#!/bin/sh
+# Blocks a commit whose added lines would publish a secret or something
+# personal, including the owner's private words from
+# %LOCALAPPDATA%\PulseDeck\publish_denylist.txt (see secret_scan.py).
+# Enabled per clone with:  git config core.hooksPath githooks
+# Skipped by:  git commit --no-verify
+cd "$(git rev-parse --show-toplevel)" || exit 1
+if command -v python >/dev/null 2>&1; then PY=python; elif command -v py >/dev/null 2>&1; then PY="py -3"; else PY=python3; fi
+exec $PY secret_scan.py --staged

@@ -955,7 +955,7 @@ def protected_dir_of(cwd: str, cmdline: str, dirs: tuple[str, ...]) -> str | Non
     """The protected folder this process runs from, or None.
 
     Matched on the working folder OR on any path in the command line: an
-    elevated process (SecurityGuard's watchdog) hides its working folder from a
+    elevated process (a guard run as admin) hides its working folder from a
     normal user, but its script path is still on its command line.
     """
     if not dirs:

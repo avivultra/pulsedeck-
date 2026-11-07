@@ -110,13 +110,13 @@ class FindSessionsTest(unittest.TestCase):
             self.assertEqual(w.find(), ([], []))
 
     def test_protected_by_folder_or_title_word(self):
-        procs = [_session(1, _sid(1), r"C:\devProject\FlowStream-V2\sub"),
-                 _session(2, _sid(2), r"E:\guides"),
+        procs = [_session(1, _sid(1), r"C:\work\Alpha-V2\sub"),
+                 _session(2, _sid(2), r"E:\demo\site"),
                  _session(3, _sid(3), r"E:\game")]
         ages = {_sid(i): 9 * HOUR for i in range(1, 4)}
-        titles = {_sid(2): "יועץ FlowStreamV2", _sid(3): "משחק"}
+        titles = {_sid(2): "יועץ Alpha2", _sid(3): "משחק"}
         with _World(procs, ages, titles) as w:
-            sessions, _ = w.find(qs.Protection(folders=(r"c:\devproject\flowstream-v2",), title_words=("flowstream",)))
+            sessions, _ = w.find(qs.Protection(folders=(r"c:\work\alpha-v2",), title_words=("alpha",)))
         self.assertEqual([t.pid for t in sessions], [3])
 
     def test_heaviest_first(self):
@@ -147,8 +147,8 @@ class FindTerminalsTest(unittest.TestCase):
     def test_terminal_stays_when_an_open_conversation_shares_its_folder(self):
         # Two conversations in one folder, one quiet and one active: the
         # terminal may be the active one's.
-        procs = [_session(1, _sid(1), r"E:\flow"), _session(2, _sid(2), r"E:\flow"),
-                 self._shell(11, r"E:\flow")]
+        procs = [_session(1, _sid(1), r"E:\alp"), _session(2, _sid(2), r"E:\alp"),
+                 self._shell(11, r"E:\alp")]
         with _World(procs, {_sid(1): 9 * HOUR, _sid(2): 60}) as w:
             sessions, terminals = w.find()
         self.assertEqual([t.pid for t in sessions], [1])
@@ -162,9 +162,9 @@ class FindTerminalsTest(unittest.TestCase):
             self.assertEqual(w.find()[1], [])
 
     def test_a_protected_conversations_terminal_stays(self):
-        procs = [_session(1, _sid(1), r"E:\flow"), self._shell(11, r"E:\flow")]
-        with _World(procs, {_sid(1): 9 * HOUR}, {_sid(1): "FlowStream"}) as w:
-            self.assertEqual(w.find(qs.Protection(title_words=("flowstream",))), ([], []))
+        procs = [_session(1, _sid(1), r"E:\alp"), self._shell(11, r"E:\alp")]
+        with _World(procs, {_sid(1): 9 * HOUR}, {_sid(1): "Alpha"}) as w:
+            self.assertEqual(w.find(qs.Protection(title_words=("alpha",))), ([], []))
 
 
 class VerifyTest(unittest.TestCase):
@@ -194,35 +194,35 @@ class SummaryTest(unittest.TestCase):
 
 
 OWNER_RULES = qs.Protection(
-    title_words=("flowstream", "flow", "פלואו", "securityguard", "sg", "multichat"),
-    path_words=("flow", "flowstream", "securityguard", "multichat", "watchdog", "control-room", "grok-handoff"),
-    folders=(r"e:\guides", r"e:\תוכנת זרימת  פלואו מקורי"))
+    title_words=("alpha", "alp", "דמו", "keeper", "kp", "duo"),
+    path_words=("alp", "alpha", "keeper", "duo", "guardian", "ops-room", "hand-off"),
+    folders=(r"e:\demo\site", r"e:\תיקיית  דמו מקורית"))
 
 
 class ProtectionTest(unittest.TestCase):
     def test_read_from_config(self):
-        cfg = {"claude": {"protected_chat_folders": [r"E:\guides\\"],
-                          "protected_chat_words": [" FlowStream ", ""],
-                          "protected_path_words": ["Watchdog"]}}
+        cfg = {"claude": {"protected_chat_folders": [r"E:\demo\site\\"],
+                          "protected_chat_words": [" Alpha ", ""],
+                          "protected_path_words": ["Guardian"]}}
         with mock.patch("config.load_config", return_value=cfg):
             self.assertEqual(qs.protection(), qs.Protection(
-                title_words=("flowstream",), path_words=("watchdog",), folders=(r"e:\guides",)))
+                title_words=("alpha",), path_words=("guardian",), folders=(r"e:\demo\site",)))
 
     def test_any_one_rule_is_enough(self):
         r = OWNER_RULES
-        self.assertTrue(r.chat(r"E:\game", "יועץ FlowStreamV2"))            # title
-        self.assertTrue(r.chat(r"E:\game", "בדיקת SG"))
-        self.assertTrue(r.chat(r"E:\Flow-Hub\SecurityGuard", "משחק"))      # path word, any case
-        self.assertTrue(r.chat(r"C:\Users\a\AppData\Local\Temp\flow_isolated_7", ""))
-        self.assertTrue(r.chat(r"E:\control-room-mcp", ""))
-        self.assertTrue(r.chat(r"E:\guides", "יועץ"))                       # listed folder
-        self.assertTrue(r.chat(r"E:\תוכנת זרימת  פלואו מקורי\src", ""))   # inside a listed folder
-        self.assertFalse(r.chat(r"C:\devProject\AvivArena", "שיפורים למשחק אנדרואיד"))
-        self.assertFalse(r.chat(r"E:\guides-old", ""))                      # a sibling is not inside
+        self.assertTrue(r.chat(r"E:\game", "יועץ Alpha2"))            # title
+        self.assertTrue(r.chat(r"E:\game", "בדיקת KP"))
+        self.assertTrue(r.chat(r"E:\Alp-Hub\Keeper", "משחק"))      # path word, any case
+        self.assertTrue(r.chat(r"C:\Users\a\AppData\Local\Temp\alp_isolated_7", ""))
+        self.assertTrue(r.chat(r"E:\ops-room-mcp", ""))
+        self.assertTrue(r.chat(r"E:\demo\site", "יועץ"))                       # listed folder
+        self.assertTrue(r.chat(r"E:\תיקיית  דמו מקורית\src", ""))   # inside a listed folder
+        self.assertFalse(r.chat(r"C:\work\app-b", "שיחה אחרת"))
+        self.assertFalse(r.chat(r"E:\demo\site-old", ""))                      # a sibling is not inside
 
     def test_a_protected_chats_children_are_protected(self):
         chat = FakeProc(50, "claude.exe", cmd=["claude.exe", "claude-code", "--resume", _sid(5)],
-                        cwd=r"C:\devProject\FlowStream-V2")
+                        cwd=r"C:\work\Alpha-V2")
         other = FakeProc(60, "claude.exe", cmd=["claude.exe", "claude-code", "--resume", _sid(6)],
                          cwd=r"E:\game")
         tree = {7: [FakeProc(1, "node.exe"), chat], 8: [other]}
@@ -234,7 +234,7 @@ class ProtectionTest(unittest.TestCase):
     def test_a_protected_chat_is_protected_itself(self):
         # cwd/cmdline given are not protected; only the process being the chat is.
         chat = FakeProc(50, "claude.exe", cmd=["claude.exe", "claude-code", "--resume", _sid(5)],
-                        cwd=r"C:\devProject\FlowStream-V2")
+                        cwd=r"C:\work\Alpha-V2")
         chat.parents = lambda: []
         with mock.patch.object(qs.psutil, "Process", lambda pid: chat), \
                 mock.patch.object(qs.claude_sessions, "session_title", lambda _c: "משחק"):
@@ -242,10 +242,10 @@ class ProtectionTest(unittest.TestCase):
 
     def test_no_rules_protect_nothing_and_read_nothing(self):
         with mock.patch.object(qs.psutil, "Process", side_effect=AssertionError("walked")):
-            self.assertFalse(qs.guarded(7, r"E:\flow", "", qs.Protection()))
+            self.assertFalse(qs.guarded(7, r"E:\alp", "", qs.Protection()))
 
     def test_a_terminal_in_a_protected_path_stays(self):
-        procs = [FakeProc(11, "pwsh.exe", cwd=r"E:\flow-hub")]
+        procs = [FakeProc(11, "pwsh.exe", cwd=r"E:\alp-hub")]
         with _World(procs, {}) as w:
             self.assertEqual(w.find(OWNER_RULES)[1], [])
 

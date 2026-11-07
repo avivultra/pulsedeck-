@@ -206,18 +206,21 @@ class AskClaudeSpendTest(_InTmpPath, unittest.TestCase):
         self.assertIn("Console", str(ctx.exception))
 
 
+STORED_KEY = "sk-" + "ant-stored-0000000000"   # fake, assembled: no key-shaped text in the repo
+
+
 class KeyLookupTest(_InTmpPath, unittest.TestCase):
     def test_the_stored_key_wins_and_reaches_the_client(self):
-        secrets_store.save(secrets_store.ANTHROPIC_KEY, "sk-ant-stored-0000000000")
+        secrets_store.save(secrets_store.ANTHROPIC_KEY, STORED_KEY)
         with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-from-env"}):
-            self.assertEqual(ai_advisor.api_key(), "sk-ant-stored-0000000000")
+            self.assertEqual(ai_advisor.api_key(), STORED_KEY)
             self.assertEqual(ai_advisor.key_source(), "store")
             import anthropic
             resp = NS(stop_reason="end_turn", content=[NS(type="text", text="ok")], usage=None)
             fake = NS(beta=NS(messages=NS(create=mock.Mock(return_value=resp))))
             with mock.patch.object(anthropic, "Anthropic", return_value=fake) as make:
                 ai_advisor.ask_claude({}, budget=_budget(self.tmp), spend=_ledger(self.tmp))
-        self.assertEqual(make.call_args.kwargs["api_key"], "sk-ant-stored-0000000000")
+        self.assertEqual(make.call_args.kwargs["api_key"], STORED_KEY)
         self.assertEqual(make.call_args.kwargs["max_retries"], 0)
 
     def test_without_a_stored_key_the_environment_still_works(self):

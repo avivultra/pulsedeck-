@@ -24,7 +24,7 @@ import idle_cleanup
 from idle_cleanup import MIB
 from process_monitor import ProcessInfo
 
-DIRS = gs.normalize_dirs([r"E:\tools\muse-bridge", "E:/flow-hub/SecurityGuard/"])
+DIRS = gs.normalize_dirs([r"E:\tools\demo-bridge", "E:/alp-hub/Keeper/"])
 SID = "a3797e73-0523-4774-befd-e8e4085847b9"
 CODE_CMD = (r"C:\Users\x\AppData\Roaming\Claude\claude-code\2.1\claude.exe "
             f"--output-format stream-json --resume {SID}")
@@ -35,7 +35,7 @@ APP_CMD = (r"C:\Program Files\WindowsApps\Claude_2\app\Claude.exe --type=utility
 def _ghost(**overrides):
     fields = dict(
         pid=1234, name="python.exe", exe="C:/py/python.exe",
-        cmdline="python bridge.py", cwd=r"E:\tools\muse-bridge", username="aviv",
+        cmdline="python bridge.py", cwd=r"E:\tools\demo-bridge", username="demo",
         create_time=1000.0, age_seconds=7200.0,
         parent_pid=99, parent_name="cmd.exe", parent_alive=False,
         orphaned_for_seconds=3600.0, orphan_time_is_lower_bound=False,
@@ -53,30 +53,30 @@ def _ghost(**overrides):
 
 class ProtectedFolderTest(unittest.TestCase):
     def test_working_folder_inside_a_protected_folder(self):
-        self.assertEqual(gs.protected_dir_of(r"E:\tools\muse-bridge", "python bridge.py", DIRS),
-                         r"e:\tools\muse-bridge")
-        self.assertTrue(gs.protected_dir_of(r"e:/TOOLS/muse-bridge/sub", "", DIRS))
+        self.assertEqual(gs.protected_dir_of(r"E:\tools\demo-bridge", "python bridge.py", DIRS),
+                         r"e:\tools\demo-bridge")
+        self.assertTrue(gs.protected_dir_of(r"e:/TOOLS/demo-bridge/sub", "", DIRS))
 
     def test_script_path_on_the_command_line_when_folder_is_unreadable(self):
-        # SecurityGuard's watchdog runs elevated: its cwd reads as "".
-        cmd = r"C:\py\pythonw.exe E:\flow-hub\SecurityGuard\watchdog_guard.pyw"
-        self.assertEqual(gs.protected_dir_of("", cmd, DIRS), r"e:\flow-hub\securityguard")
-        quoted = r'"C:\py\python.exe" "E:\flow-hub\SecurityGuard\main.py"'
+        # A guard run as admin: its cwd reads as "".
+        cmd = r"C:\py\pythonw.exe E:\alp-hub\Keeper\guardian_svc.pyw"
+        self.assertEqual(gs.protected_dir_of("", cmd, DIRS), r"e:\alp-hub\keeper")
+        quoted = r'"C:\py\python.exe" "E:\alp-hub\Keeper\main.py"'
         self.assertTrue(gs.protected_dir_of("", quoted, DIRS))
 
     def test_sibling_folder_sharing_a_prefix_is_not_protected(self):
-        self.assertIsNone(gs.protected_dir_of(r"E:\tools\muse-bridge2", "python x.py", DIRS))
-        self.assertIsNone(gs.protected_dir_of("", r"python E:\flow-hub\SecurityGuardX\a.py", DIRS))
+        self.assertIsNone(gs.protected_dir_of(r"E:\tools\demo-bridge2", "python x.py", DIRS))
+        self.assertIsNone(gs.protected_dir_of("", r"python E:\alp-hub\KeeperX\a.py", DIRS))
 
     def test_no_protected_folders_configured(self):
-        self.assertIsNone(gs.protected_dir_of(r"E:\tools\muse-bridge", "x", ()))
+        self.assertIsNone(gs.protected_dir_of(r"E:\tools\demo-bridge", "x", ()))
         self.assertEqual(gs.normalize_dirs(["", None, "  "]), ())
 
 
 class RoleTest(unittest.TestCase):
     def test_server_wins_over_everything(self):
         self.assertEqual(gs.role_of("python.exe", "", "python bridge.py",
-                                    r"E:\tools\muse-bridge", False, "?", DIRS),
+                                    r"E:\tools\demo-bridge", False, "?", DIRS),
                          gs.ROLE_SERVER)
 
     def test_helper_of_an_open_app(self):
@@ -88,7 +88,7 @@ class RoleTest(unittest.TestCase):
                                     "claude.exe", DIRS), "")
 
     def test_claude_code_conversation(self):
-        self.assertEqual(gs.role_of("claude.exe", "", CODE_CMD, r"E:\guides",
+        self.assertEqual(gs.role_of("claude.exe", "", CODE_CMD, r"E:\demo\site",
                                     True, "claude.exe", DIRS), gs.ROLE_CLAUDE)
 
     def test_plain_node_server_has_no_role(self):
@@ -121,7 +121,7 @@ class CleanAllTargetsTest(unittest.TestCase):
                             rss_bytes=300 * MIB, process_uptime_seconds=9000,
                             last_active_seconds_ago=9000, observed_seconds=9000)]
         procs = {
-            10: dict(name="bridge-host.exe", cwd=r"E:\tools\muse-bridge", cmd=["bridge-host.exe"]),
+            10: dict(name="bridge-host.exe", cwd=r"E:\tools\demo-bridge", cmd=["bridge-host.exe"]),
             11: dict(name="tray.exe", cwd=r"C:\Apps\Tray", cmd=["tray.exe", "--quiet"]),
         }
 
@@ -133,7 +133,7 @@ class CleanAllTargetsTest(unittest.TestCase):
             def parent(self): return None
             def children(self, recursive=False): return []
             def memory_info(self): return SimpleNamespace(rss=300 * MIB)
-            def username(self): return "PC\\aviv"
+            def username(self): return "PC\\dana"
             def exe(self): return r"C:\Apps\x.exe"
             def create_time(self): return 1000.0
             def cwd(self): return self._d["cwd"]
@@ -182,7 +182,7 @@ class SessionTitleTest(unittest.TestCase):
         cs._cache.clear()
         self.tmp.cleanup()
 
-    def _write(self, records, *, sid=SID, project="E--guides"):
+    def _write(self, records, *, sid=SID, project="E--demo-site"):
         folder = self.root / project
         folder.mkdir(exist_ok=True)
         with (folder / f"{sid}.jsonl").open("w", encoding="utf-8") as f:
@@ -193,9 +193,9 @@ class SessionTitleTest(unittest.TestCase):
         self._write([{"type": "custom-title", "customTitle": "ישן"},
                      {"type": "user", "message": self.SECRET},
                      {"type": "ai-title", "aiTitle": "Generated"},
-                     {"type": "custom-title", "customTitle": "יועץ FLOWSTREAM"},
+                     {"type": "custom-title", "customTitle": "יועץ ALPHA"},
                      {"type": "assistant", "message": self.SECRET}])
-        self.assertEqual(cs.session_title(CODE_CMD), "יועץ FLOWSTREAM")
+        self.assertEqual(cs.session_title(CODE_CMD), "יועץ ALPHA")
 
     def test_generated_title_when_there_is_no_custom_one(self):
         self._write([{"type": "user", "message": self.SECRET},
@@ -253,7 +253,7 @@ class TitleNeverLoggedTest(unittest.TestCase):
         audit.handlers = [_H()]
         audit.propagate = False
         audit.setLevel(logging.INFO)
-        ghost = _ghost(name="claude.exe", cmdline=CODE_CMD, cwd=r"E:\guides",
+        ghost = _ghost(name="claude.exe", cmdline=CODE_CMD, cwd=r"E:\demo\site",
                        role=gs.ROLE_CLAUDE, session_title="שם שיחה סודי")
         sw = gs.GhostSweeper()
         with mock.patch.object(gs, "_get_sweep_logger", return_value=audit):
@@ -268,10 +268,10 @@ class TitleNeverLoggedTest(unittest.TestCase):
 class PanelTextTest(unittest.TestCase):
     def test_claude_card_shows_title_and_folder_or_folder_alone(self):
         import ghost_panel as gp
-        with_title = _ghost(role=gs.ROLE_CLAUDE, cwd=r"E:\guides", session_title="יועץ")
-        self.assertEqual(gp.claude_context(with_title), "💬 יועץ   ·   📁 E:\\guides")
-        no_title = _ghost(role=gs.ROLE_CLAUDE, cwd=r"E:\guides", session_title="")
-        self.assertEqual(gp.claude_context(no_title), "📁 E:\\guides")
+        with_title = _ghost(role=gs.ROLE_CLAUDE, cwd=r"E:\demo\site", session_title="יועץ")
+        self.assertEqual(gp.claude_context(with_title), "💬 יועץ   ·   📁 E:\\demo\\site")
+        no_title = _ghost(role=gs.ROLE_CLAUDE, cwd=r"E:\demo\site", session_title="")
+        self.assertEqual(gp.claude_context(no_title), "📁 E:\\demo\\site")
 
     def test_role_chips(self):
         import ghost_panel as gp
