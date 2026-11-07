@@ -63,6 +63,10 @@ def _cmdline_hint(proc: psutil.Process) -> str:
         return ""
     if not parts:
         return ""
+    # Always masked (whatever redact_secrets says): flags are dropped below,
+    # which would leave `--token VALUE`'s value bare.
+    from ghost_sweeper import redact_args
+    parts = redact_args(parts)
     # Drop the interpreter path, keep the script/args essence
     tail = [p for p in parts[1:] if not p.startswith("-")][:3]
     joined = " ".join(os.path.basename(p) if os.sep in p or "/" in p else p

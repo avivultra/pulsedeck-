@@ -374,6 +374,20 @@ def redact_cmdline(text: str) -> str:
     return text
 
 
+_SECRET_FLAG = re.compile(rf"(?i)^--?{_SECRET_KEY}$")
+
+
+def redact_args(parts: list[str]) -> list[str]:
+    """redact_cmdline for an argv list, for callers that pick arguments out
+    of it (a flag is dropped, its value kept): the value after a secret flag
+    is masked, and every argument is masked by shape."""
+    out, after_flag = [], False
+    for part in parts:
+        out.append(MASK if after_flag and not part.startswith("-") else redact_cmdline(part))
+        after_flag = bool(_SECRET_FLAG.match(part))
+    return out
+
+
 def secrets_are_redacted() -> bool:
     """Whether the panel should mask secrets. Defaults to True."""
     try:
