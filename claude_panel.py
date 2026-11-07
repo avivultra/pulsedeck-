@@ -33,6 +33,7 @@ _ACTION_LABELS = {
     "close": lambda n: tr(f"סגור את {n}", f"Close {n}"),
     "force": lambda n: tr(f"סגור את {n} בכוח", f"Force-close {n}"),
     "clean": lambda n: tr(f"נקה את השאריות של {n}", f"Clean up {n}'s leftovers"),
+    "close_quiet_chats": lambda _n: tr("בחר שיחות Claude שקטות לסגירה", "Pick quiet Claude chats to close"),
 }
 
 
@@ -251,6 +252,12 @@ def open_claude_panel(parent: tk.Misc, snapshot_fn: Callable[[], dict],
 
     def _ask_first(action: str, name: str, btn: tk.Label, status: tk.Label) -> None:
         """Nothing runs before the user says yes, here, for this one program."""
+        if action == "close_quiet_chats":
+            # The list itself is the confirmation: every chat is ticked or
+            # unticked there, and nothing closes before its button.
+            from ghost_panel import open_quiet_chats_dialog
+            open_quiet_chats_dialog(win)
+            return
         from dark_menu import confirm
         title, text, ok, danger = _confirm_text(action, name)
         confirm(win, title, text, ok, lambda yes: yes and _run(action, name, btn, status), danger=danger)

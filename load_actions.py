@@ -678,6 +678,13 @@ def context_for_claude() -> dict:
         log.exception("Could not see who loads the computer")
     try:
         usage = claude_usage(_claude_rows(), _idle_seconds_by_pid())
+        try:
+            import quiet_sessions
+            quiet = quiet_sessions.summary()          # counts and MB only
+            if quiet:
+                usage["closable_quiet_chats"] = {**quiet, "can": ["close_quiet_chats"]}
+        except Exception:
+            log.exception("Could not look for quiet Claude chats")
         if usage:
             out["claude_app"] = usage
     except Exception:

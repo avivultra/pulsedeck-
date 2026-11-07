@@ -343,10 +343,13 @@ class ClaudeUsageTest(unittest.TestCase):
     def test_context_keeps_the_parts_that_worked(self):
         with mock.patch.object(la, "heavy_programs", side_effect=RuntimeError("boom")), \
              mock.patch.object(la, "_claude_rows", return_value=self._rows()), \
-             mock.patch.object(la, "_idle_seconds_by_pid", return_value={}):
+             mock.patch.object(la, "_idle_seconds_by_pid", return_value={}), \
+             mock.patch("quiet_sessions.summary", return_value={"quiet_sessions": 2}):
             out = la.context_for_claude()
         self.assertNotIn("load_last_minute", out)
         self.assertEqual(out["claude_app"]["code_sessions"]["count"], 3)
+        self.assertEqual(out["claude_app"]["closable_quiet_chats"],
+                         {"quiet_sessions": 2, "can": ["close_quiet_chats"]})
 
 
 class SuggestionsTest(unittest.TestCase):

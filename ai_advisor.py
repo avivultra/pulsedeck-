@@ -83,9 +83,13 @@ where it goes and roughly how much could be freed.
 "claude_app" (when present) is the Claude app itself: its own processes, \
 the Claude Code sessions (how many, their memory, how many have done nothing \
 for over an hour and what those hold) and the shells the sessions opened. \
-PulseDeck never closes Claude. When it holds a large share, say how much the \
-quiet sessions hold and that the user can close the ones they no longer need \
-from the Claude app; one of them is probably the session they work in.
+PulseDeck never closes the Claude app. "closable_quiet_chats" (when present) \
+counts the sessions nobody wrote in for over an hour and the terminals they \
+left, with their memory: PulseDeck can list them for the user to tick and \
+close ("can": "close_quiet_chats", program "Claude"); a closed conversation \
+is kept and starts again when opened. When memory is high and they hold a \
+real share, say how much and suggest that action; never tell the user to \
+hunt for the sessions themselves.
 
 "load_last_minute" lists the programs that used the computer most over the \
 last minute, with what PulseDeck can do about each ("can"): "lower" lowers \
@@ -110,14 +114,15 @@ The user confirms every action; nothing runs on its own."""
 # confirms. Only names and actions from the snapshot's "can" lists survive.
 SUGGEST_TOOL = {
     "name": "suggest_actions",
-    "description": "Offer the user up to three one-click actions on programs from load_last_minute "
-                   "or leftovers. Each runs only after the user confirms it.",
+    "description": "Offer the user up to three one-click actions on programs from load_last_minute, "
+                   "leftovers or claude_app. Each runs only after the user confirms it.",
     "input_schema": {
         "type": "object",
         "properties": {"actions": {"type": "array", "maxItems": 3, "items": {
             "type": "object",
             "properties": {"program": {"type": "string"},
-                           "action": {"type": "string", "enum": ["lower", "restore", "close", "clean"]},
+                           "action": {"type": "string",
+                                      "enum": ["lower", "restore", "close", "clean", "close_quiet_chats"]},
                            "why": {"type": "string", "description": "One short sentence, in the answer's language."}},
             "required": ["program", "action", "why"]}}},
         "required": ["actions"],
@@ -407,7 +412,9 @@ def _allowed_actions(snapshot: dict) -> dict[str, tuple[str, list[str]]]:
     program in both lists gets both: "lower" from the last minute, "clean"
     from its leftovers."""
     out: dict[str, tuple[str, list[str]]] = {}
-    for item in (snapshot.get("load_last_minute") or []) + (snapshot.get("leftovers") or []):
+    quiet = (snapshot.get("claude_app") or {}).get("closable_quiet_chats") or {}
+    extra = [{"name": "Claude", "can": quiet["can"]}] if quiet.get("can") else []
+    for item in (snapshot.get("load_last_minute") or []) + (snapshot.get("leftovers") or []) + extra:
         if item.get("can"):
             name, can = out.get(str(item["name"]).lower(), (str(item["name"]), []))
             out[name.lower()] = (name, can + [a for a in item["can"] if a not in can])
