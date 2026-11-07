@@ -148,7 +148,10 @@ class SetupWindowTest(unittest.TestCase):
         with mock.patch.dict(os.environ, env, clear=True), \
              mock.patch.object(ai_advisor, "load_env"), \
              mock.patch.object(ai_advisor, "ask_claude", return_value="הכול תקין.") as ask, \
-             mock.patch("load_actions.heavy_programs", return_value=([], "history")):
+             mock.patch("load_actions.heavy_programs", return_value=([], "history")), \
+             mock.patch("load_actions.context_for_claude", return_value={}):
+            # The real context scans every process on the machine (seconds);
+            # this test is about the window asking by itself, not about that.
             panel = claude_panel.open_claude_panel(self.root, lambda: {})
             self.root.update()
             button = next(lab for lab in self._labels(panel) if "חבר מפתח" in lab.cget("text"))
