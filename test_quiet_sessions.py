@@ -231,6 +231,15 @@ class ProtectionTest(unittest.TestCase):
             self.assertTrue(qs.guarded(7, r"E:\work", "python agent.py", OWNER_RULES))
             self.assertFalse(qs.guarded(8, r"E:\work", "python agent.py", OWNER_RULES))
 
+    def test_a_protected_chat_is_protected_itself(self):
+        # cwd/cmdline given are not protected; only the process being the chat is.
+        chat = FakeProc(50, "claude.exe", cmd=["claude.exe", "claude-code", "--resume", _sid(5)],
+                        cwd=r"C:\devProject\FlowStream-V2")
+        chat.parents = lambda: []
+        with mock.patch.object(qs.psutil, "Process", lambda pid: chat), \
+                mock.patch.object(qs.claude_sessions, "session_title", lambda _c: "משחק"):
+            self.assertTrue(qs.guarded(50, r"E:\work", "claude.exe", OWNER_RULES))
+
     def test_no_rules_protect_nothing_and_read_nothing(self):
         with mock.patch.object(qs.psutil, "Process", side_effect=AssertionError("walked")):
             self.assertFalse(qs.guarded(7, r"E:\flow", "", qs.Protection()))

@@ -130,8 +130,8 @@ def protection() -> Protection:
 
 
 def guarded(pid: int, cwd: str, cmdline: str, rules: Protection | None = None) -> bool:
-    """True when this process runs from a protected path, or descends from a
-    protected Claude conversation (its python, node, agents, `claude -p`...).
+    """True when this process runs from a protected path, is a protected Claude
+    conversation, or descends from one (its python, node, agents, `claude -p`...).
     Walks the parent chain: call it off the Tk thread, for a few processes."""
     rules = protection() if rules is None else rules
     if not (rules.title_words or rules.path_words or rules.folders):
@@ -139,10 +139,11 @@ def guarded(pid: int, cwd: str, cmdline: str, rules: Protection | None = None) -
     if rules.path(cwd, cmdline):
         return True
     try:
-        parents = psutil.Process(pid).parents()
+        proc = psutil.Process(pid)
+        chain = [proc, *proc.parents()]
     except (psutil.Error, OSError):
         return False
-    for parent in parents:
+    for parent in chain:
         try:
             if parent.name().lower() not in ("claude.exe", "claude"):
                 continue

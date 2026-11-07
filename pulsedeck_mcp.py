@@ -265,6 +265,16 @@ def tool_close(args: dict) -> str:
     if match["connections"]:
         raise ValueError(f"{match['name']} (pid {pid}) has {match['connections']} open connection(s) and "
                          "is in use; not closing it.")
+    # The same protected conversations the panel never offers (config.json
+    # claude.protected_*): a protected chat, anything it started, its folders.
+    import quiet_sessions
+    try:
+        cmd = _cmdline(psutil.Process(pid)) or ""
+    except psutil.Error:
+        cmd = ""
+    if quiet_sessions.guarded(pid, match["cwd"], cmd):
+        raise ValueError(f"{match['name']} (pid {pid}) belongs to a protected Claude conversation "
+                         "(claude.protected_* in config.json); it is never closed from here.")
     outcome = terminate_process(pid, match["name"], create_time)
     messages = {"closed": f"Closed {match['name']} (pid {pid}), freed about {_fmt_bytes(match['memory'])}.",
                 "already_gone": f"{match['name']} (pid {pid}) had already exited.",

@@ -230,6 +230,50 @@ class ServerFoldersAreNeverClosedTest(unittest.TestCase):
                 pulsedeck_mcp.tool_close({"pid": 5151, "folder": root})
         terminate.assert_not_called()
 
+    def test_protected_conversations_are_refused_by_close(self):
+        """config.json claude.protected_*: the panel never offers these, and
+        pulsedeck_close must refuse them too — a protected path, or a child of
+        a protected Claude chat. Fake processes only."""
+        from types import SimpleNamespace
+        from unittest import mock
+        import quiet_sessions
+        root = tempfile.mkdtemp()
+
+        def fake(pid, cwd, parents=()):
+            p = mock.Mock()
+            p.info = {"pid": pid, "name": "python.exe", "create_time": 1000.0,
+                      "memory_info": SimpleNamespace(rss=40 * 1024 ** 2),
+                      "cpu_times": SimpleNamespace(user=1.0, system=0.0)}
+            p.cwd.return_value = cwd
+            p.cmdline.return_value = ["python.exe", "agent.py"]
+            p.parent.return_value = None
+            p.parents.return_value = list(parents)
+            return p
+
+        chat = mock.Mock()
+        chat.name.return_value = "claude.exe"
+        chat.exe.return_value = r"C:\Program Files\Claude\claude.exe"
+        chat.cmdline.return_value = ["claude.exe", "claude-code"]
+        chat.cwd.return_value = r"E:\game"
+        in_path = fake(6161, str(Path(root) / "flow-hub"))
+        child = fake(6262, root, parents=[chat])
+        procs = {6161: in_path, 6262: child}
+        rules = quiet_sessions.Protection(title_words=("flowstream",), path_words=("flow-hub",))
+        with mock.patch.object(pulsedeck_mcp.psutil, "process_iter", return_value=[in_path, child]), \
+             mock.patch.object(pulsedeck_mcp, "_protected_pids", return_value=set()), \
+             mock.patch.object(pulsedeck_mcp, "_server_dirs", return_value=()), \
+             mock.patch("ghost_sweeper._connection_map", return_value=({}, {})), \
+             mock.patch.object(pulsedeck_mcp.psutil, "Process", side_effect=lambda pid: procs[pid]), \
+             mock.patch.object(quiet_sessions.psutil, "Process", side_effect=lambda pid: procs[pid]), \
+             mock.patch.object(quiet_sessions, "protection", return_value=rules), \
+             mock.patch.object(quiet_sessions.claude_sessions, "is_claude_code", return_value=True), \
+             mock.patch.object(quiet_sessions.claude_sessions, "session_title", return_value="יועץ FlowStreamV2"), \
+             mock.patch("alerts.terminate_process") as terminate:
+            for pid in (6161, 6262):
+                with self.assertRaisesRegex(ValueError, "protected Claude conversation"):
+                    pulsedeck_mcp.tool_close({"pid": pid, "folder": root})
+        terminate.assert_not_called()
+
     def test_a_sibling_folder_sharing_a_prefix_is_not_a_leftover(self):
         from types import SimpleNamespace
         from unittest import mock
