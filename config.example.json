@@ -43,5 +43,11 @@
       "pythonw.exe",
       "code.exe"
     ]
+  },
+  "claude": {
+    "monthly_usd": 5.0,
+    "protected_chat_words": ["MyImportantProject"],
+    "protected_path_words": ["my-important-project"],
+    "protected_chat_folders": ["D:\\work\\my-important-project"]
   }
 }

@@ -1,0 +1,2 @@
+# Git hooks run under sh: keep Unix line endings on every checkout.
+githooks/* text eol=lf
