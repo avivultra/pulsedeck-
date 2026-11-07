@@ -1,26 +1,40 @@
 """Tests for the monthly dollar cap on Ask Claude (no network: the client is faked)."""
 from __future__ import annotations
 
+import itertools
 import os
-import tempfile
 import unittest
 from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace as NS
 from unittest import mock
 
+import pytest
+
 import ai_advisor
 import claude_spend
 import secrets_store
 
 
-def _ledger(cap=5.0, now=None):
-    return claude_spend.Ledger(Path(tempfile.mkdtemp()) / "spend.json", cap=lambda: cap,
+_files = itertools.count()      # a fresh file for each ledger and budget, as before
+
+
+def _ledger(folder: Path, cap=5.0, now=None):
+    return claude_spend.Ledger(folder / f"spend-{next(_files)}.json", cap=lambda: cap,
                                now=now or (lambda: datetime(2026, 10, 17, 12).timestamp()))
 
 
-def _budget():
-    return ai_advisor.Budget(Path(tempfile.mkdtemp()) / "usage.json")
+def _budget(folder: Path):
+    return ai_advisor.Budget(folder / f"usage-{next(_files)}.json")
+
+
+class _InTmpPath:
+    """self.tmp: pytest's tmp_path, which pytest deletes itself (keeping the
+    last three runs). unittest methods cannot take it as an argument."""
+
+    @pytest.fixture(autouse=True)
+    def _tmp_path(self, tmp_path):
+        self.tmp = tmp_path
 
 
 def _http():
@@ -68,9 +82,9 @@ class PriceTest(unittest.TestCase):
         self.assertEqual(claude_spend.usd(0), "$0.00")
 
 
-class LedgerTest(unittest.TestCase):
+class LedgerTest(_InTmpPath, unittest.TestCase):
     def test_reserve_then_settle_records_the_real_cost(self):
-        led = _ledger()
+        led = _ledger(self.tmp)
         hold = led.reserve(0.20)
         self.assertAlmostEqual(led.month_usd(), 0.20)        # the worst case, while it runs
         led.settle(hold, 0.03)
@@ -80,14 +94,14 @@ class LedgerTest(unittest.TestCase):
         self.assertAlmostEqual(led.month_usd(), 0.03)
 
     def test_release_gives_it_back_and_keep_does_not(self):
-        led = _ledger()
+        led = _ledger(self.tmp)
         led.release(led.reserve(0.20))
         self.assertEqual(led.totals(date(2026, 10, 1), date(2026, 10, 31)), (0, 0.0))
         led.keep(led.reserve(0.20))
         self.assertAlmostEqual(led.month_usd(), 0.20)
 
     def test_refuses_what_could_pass_the_cap(self):
-        led = _ledger(cap=1.0)
+        led = _ledger(self.tmp, cap=1.0)
         events = []
         led.listeners.append(events.append)
         led.settle(led.reserve(0.85), 0.85)
@@ -100,7 +114,7 @@ class LedgerTest(unittest.TestCase):
 
     def test_a_new_month_starts_from_zero_and_old_days_are_pruned(self):
         t = {"now": datetime(2026, 10, 31, 23).timestamp()}
-        led = _ledger(cap=1.0, now=lambda: t["now"])
+        led = _ledger(self.tmp, cap=1.0, now=lambda: t["now"])
         led.settle(led.reserve(0.9), 0.9)
         t["now"] = datetime(2026, 11, 1, 0, 30).timestamp()
         self.assertEqual(led.month_usd(), 0.0)
@@ -112,7 +126,7 @@ class LedgerTest(unittest.TestCase):
 
     def test_a_hold_settled_after_midnight_lands_on_its_own_day(self):
         t = {"now": datetime(2026, 10, 31, 23, 59, 50).timestamp()}
-        led = _ledger(now=lambda: t["now"])
+        led = _ledger(self.tmp, now=lambda: t["now"])
         hold = led.reserve(0.2)
         t["now"] = datetime(2026, 11, 1, 0, 0, 20).timestamp()
         led.settle(hold, 0.03)
@@ -120,7 +134,7 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(led.month_usd("2026-11"), 0.0)
 
     def test_a_broken_file_starts_empty(self):
-        led = _ledger()
+        led = _ledger(self.tmp)
         led.path.write_text("{not json", encoding="utf-8")
         self.assertEqual(led.month_usd(), 0.0)
         led.reserve(0.1)
@@ -135,18 +149,18 @@ class LedgerTest(unittest.TestCase):
             self.assertEqual(claude_spend.configured_cap(), 5.0)
 
 
-class AskClaudeSpendTest(unittest.TestCase):
+class AskClaudeSpendTest(_InTmpPath, unittest.TestCase):
     """ask_claude and the ledger together."""
 
     def setUp(self):
-        self.led = _ledger()
+        self.led = _ledger(self.tmp)
         p = mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"})
         p.start()
         self.addCleanup(p.stop)
 
     def _ask(self, create, **kw):
         client = NS(beta=NS(messages=NS(create=create)))
-        return ai_advisor.ask_claude({}, client=client, budget=_budget(), spend=self.led, **kw)
+        return ai_advisor.ask_claude({}, client=client, budget=_budget(self.tmp), spend=self.led, **kw)
 
     def test_an_answer_is_priced_by_the_model_that_gave_it(self):
         resp = NS(stop_reason="end_turn", content=[NS(type="text", text="ok")],
@@ -163,7 +177,7 @@ class AskClaudeSpendTest(unittest.TestCase):
         self.assertIn("לתקרה החודשית", str(ctx.exception))
 
     def test_the_daily_cap_gives_the_dollars_back(self):
-        budget = _budget()
+        budget = _budget(self.tmp)
         with mock.patch.dict(os.environ, {"PULSEDECK_CLAUDE_DAILY_REQUESTS": "0"}):
             with self.assertRaises(ai_advisor.AdvisorError):
                 ai_advisor.ask_claude({}, client=NS(), budget=budget, spend=self.led)
@@ -192,7 +206,7 @@ class AskClaudeSpendTest(unittest.TestCase):
         self.assertIn("Console", str(ctx.exception))
 
 
-class KeyLookupTest(unittest.TestCase):
+class KeyLookupTest(_InTmpPath, unittest.TestCase):
     def test_the_stored_key_wins_and_reaches_the_client(self):
         secrets_store.save(secrets_store.ANTHROPIC_KEY, "sk-ant-stored-0000000000")
         with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-from-env"}):
@@ -202,7 +216,7 @@ class KeyLookupTest(unittest.TestCase):
             resp = NS(stop_reason="end_turn", content=[NS(type="text", text="ok")], usage=None)
             fake = NS(beta=NS(messages=NS(create=mock.Mock(return_value=resp))))
             with mock.patch.object(anthropic, "Anthropic", return_value=fake) as make:
-                ai_advisor.ask_claude({}, budget=_budget(), spend=_ledger())
+                ai_advisor.ask_claude({}, budget=_budget(self.tmp), spend=_ledger(self.tmp))
         self.assertEqual(make.call_args.kwargs["api_key"], "sk-ant-stored-0000000000")
         self.assertEqual(make.call_args.kwargs["max_retries"], 0)
 

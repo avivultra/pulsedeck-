@@ -2,18 +2,28 @@
 from __future__ import annotations
 
 import os
-import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace as NS
 from unittest import mock
 
+import pytest
+
 import ai_advisor
 
 
-def _budget(now=None):
+def _budget(folder: Path, now=None):
     kw = {"now": now} if now else {}
-    return ai_advisor.Budget(Path(tempfile.mkdtemp()) / "usage.json", **kw)
+    return ai_advisor.Budget(folder / "usage.json", **kw)
+
+
+class _InTmpPath:
+    """self.tmp: pytest's tmp_path, which pytest deletes itself (keeping the
+    last three runs). unittest methods cannot take it as an argument."""
+
+    @pytest.fixture(autouse=True)
+    def _tmp_path(self, tmp_path):
+        self.tmp = tmp_path
 
 
 def _snap(**kw):
@@ -24,9 +34,9 @@ def _snap(**kw):
     return NS(**base)
 
 
-class LoadEnvTest(unittest.TestCase):
+class LoadEnvTest(_InTmpPath, unittest.TestCase):
     def test_reads_values_strips_quotes_and_keeps_existing_vars(self):
-        p = Path(tempfile.mkdtemp()) / ".env"
+        p = self.tmp / ".env"
         p.write_text('# comment\nexport PD_TEST_A="one"\nPD_TEST_B=two\n\nPD_TEST_C=fromfile\n',
                      encoding="utf-8")
         with mock.patch.dict(os.environ, {"PD_TEST_C": "already"}, clear=False):
@@ -38,7 +48,7 @@ class LoadEnvTest(unittest.TestCase):
             os.environ.pop(k, None)
 
     def test_missing_file_is_fine(self):
-        ai_advisor.load_env(Path(tempfile.mkdtemp()) / "nope.env")
+        ai_advisor.load_env(self.tmp / "nope.env")
 
 
 class SnapshotTest(unittest.TestCase):
@@ -72,7 +82,7 @@ class SnapshotTest(unittest.TestCase):
         self.assertEqual(len(snap["top_memory"]), 400)                       # the caller's copy is untouched
 
 
-class AskClaudeTest(unittest.TestCase):
+class AskClaudeTest(_InTmpPath, unittest.TestCase):
     def _client(self, response):
         create = mock.Mock(return_value=response)
         return NS(beta=NS(messages=NS(create=create))), create
@@ -82,7 +92,7 @@ class AskClaudeTest(unittest.TestCase):
         client, create = self._client(resp)
         with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}):
             out = ai_advisor.ask_claude({"now": {}}, "why slow?", language="he", client=client,
-                                        budget=_budget())
+                                        budget=_budget(self.tmp))
         self.assertEqual(out, "All good.")
         kw = create.call_args.kwargs
         self.assertEqual(kw["fallbacks"], "default")
@@ -94,22 +104,22 @@ class AskClaudeTest(unittest.TestCase):
         client, _ = self._client(NS(stop_reason="refusal", content=[]))
         with mock.patch.dict(os.environ, {"ANTHROPIC_API_KEY": "sk-test"}):
             with self.assertRaises(ai_advisor.AdvisorError):
-                ai_advisor.ask_claude({}, client=client, budget=_budget())
+                ai_advisor.ask_claude({}, client=client, budget=_budget(self.tmp))
 
     def test_no_key_explains_the_env_file(self):
         env = {k: v for k, v in os.environ.items()
                if k not in ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")}
         with mock.patch.dict(os.environ, env, clear=True), \
-                mock.patch.object(ai_advisor, "ENV_PATH", Path(tempfile.mkdtemp()) / ".env"):
+                mock.patch.object(ai_advisor, "ENV_PATH", self.tmp / ".env"):
             with self.assertRaises(ai_advisor.AdvisorError) as ctx:
                 ai_advisor.ask_claude({})
         self.assertIn(".env", str(ctx.exception))
 
 
-class BudgetTest(unittest.TestCase):
+class BudgetTest(_InTmpPath, unittest.TestCase):
     def setUp(self):
         self.t = 1_000_000.0
-        self.b = _budget(now=lambda: self.t)
+        self.b = _budget(self.tmp, now=lambda: self.t)
 
     def test_gap_between_requests(self):
         self.b.reserve()
