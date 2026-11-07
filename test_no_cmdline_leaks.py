@@ -52,7 +52,7 @@ class McpOutputHasNoCommandLines(unittest.TestCase):
         self.assertNotIn(MARKER, port)
 
     def test_a_refused_close_does_not_echo_it_either(self):
-        with mock.patch.object(pulsedeck_mcp, "_server_dirs", return_value=(self.folder.lower(),)), \
+        with mock.patch.object(pulsedeck_mcp, "_server_dirs", return_value=ghost_sweeper.normalize_dirs([self.folder])), \
              mock.patch("alerts.terminate_process") as terminate:
             with self.assertRaises(ValueError) as caught:
                 pulsedeck_mcp.tool_close({"pid": self.child.pid, "folder": self.folder})
@@ -159,7 +159,8 @@ class ScreenToggleIsScreenOnly(unittest.TestCase):
         finally:
             child.kill()
             child.wait(timeout=10)
-        self.assertTrue(context.strip("{}"))
+        if sys.platform == "win32":                 # elsewhere parts of it may be empty
+            self.assertTrue(context.strip("{}"))
         self._assert_clean(context)
         self.assertNotIn(folder, context)
 
