@@ -89,5 +89,95 @@ class TextFromCommandLinesIsAlwaysRedacted(unittest.TestCase):
                          ["app", "--token", "--verbose"])
 
 
+class ScreenToggleIsScreenOnly(unittest.TestCase):
+    """sweeper.redact_secrets=false unmasks the ghost panel on screen, and
+    nothing else: the sweep log, Ask Claude and Telegram stay clean."""
+
+    SECRET = "hunter" + "2Zq9"
+    BARE = "gh" + "p_" + "Q1w2E3r4" * 5
+    TITLE = "כותרת" + "Marker8"
+
+    def setUp(self):
+        import logging
+
+        class Capture(logging.Handler):
+            def __init__(self):
+                super().__init__()
+                self.lines = []
+
+            def emit(self, record):
+                self.lines.append(record.getMessage())
+
+        self.capture = Capture()
+        isolated = logging.getLogger("ghost_sweeper.audit.leaks-test")
+        isolated.handlers, isolated.propagate = [self.capture], False
+        isolated.setLevel(logging.INFO)
+        original = ghost_sweeper._sweep_logger
+        ghost_sweeper._sweep_logger = isolated       # never the real history/sweeper.log
+        self.addCleanup(setattr, ghost_sweeper, "_sweep_logger", original)
+        toggle = mock.patch.object(ghost_sweeper, "secrets_are_redacted", return_value=False)
+        toggle.start()
+        self.addCleanup(toggle.stop)
+
+    def _assert_clean(self, text):
+        for leak in (self.SECRET, self.BARE, self.TITLE):
+            self.assertNotIn(leak, text)
+
+    def test_sweep_log(self):
+        from test_ghost_sweeper import _fake_ghost
+        g = _fake_ghost(cmdline=f"node bot.js --password {self.SECRET} {self.BARE}",
+                        session_title=self.TITLE)
+        ghost_sweeper.GhostSweeper()._record_sweep([g])
+        ghost_sweeper.GhostSweeper().log_user_action(g, "close")
+        text = "\n".join(self.capture.lines)
+        self.assertIn("NEW node.exe", text)
+        self._assert_clean(text)
+
+    def test_closing_a_quiet_chat_does_not_log_its_title(self):
+        import idle_cleanup
+        import quiet_sessions
+        for kind in ("claude", "terminal"):
+            t = idle_cleanup.CleanupTarget(
+                pid=7, name="claude.exe", create_time=1.0, rss_bytes=1, kind=kind,
+                detail=quiet_sessions._session_detail(self.TITLE, 4000), cmdline="")
+            idle_cleanup._log_close(t, "closed")
+        text = "\n".join(self.capture.lines)
+        self.assertIn("kind=claude", text)
+        self._assert_clean(text)
+
+    def test_ask_claude_context(self):
+        """What Ask Claude sends is built from names and numbers only. A sleeper
+        whose folder name and argv carry markers runs meanwhile; neither may
+        show up. (Reads the real machine for a few seconds; closes nothing.)"""
+        import json
+        import load_actions
+        folder = tempfile.mkdtemp(prefix=self.TITLE)
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)",
+                                  "--token", self.SECRET, self.BARE], cwd=folder)
+        try:
+            context = json.dumps(load_actions.context_for_claude(), ensure_ascii=False)
+        finally:
+            child.kill()
+            child.wait(timeout=10)
+        self.assertTrue(context.strip("{}"))
+        self._assert_clean(context)
+        self.assertNotIn(folder, context)
+
+    def test_telegram_only_ever_sends_spend_reports(self):
+        """Telegram gets money totals, never process data: the only modules
+        that send are the spend reports and the setup's test message, and
+        neither reads processes."""
+        import re
+        senders = sorted(p.name for p in HERE.glob("*.py")
+                         if not p.name.startswith("test_")
+                         and "telegram_notify.send(" in p.read_text(encoding="utf-8"))
+        self.assertEqual(senders, ["claude_setup.py", "spend_reports.py"])
+        process_modules = re.compile(r"^\s*(?:import|from)\s+(psutil|ghost_sweeper|quiet_sessions|"
+                                     r"load_actions|idle_cleanup|pulsedeck_mcp)\b", re.M)
+        for name in senders:
+            with self.subTest(name):
+                self.assertIsNone(process_modules.search((HERE / name).read_text(encoding="utf-8")))
+
+
 if __name__ == "__main__":
     unittest.main()

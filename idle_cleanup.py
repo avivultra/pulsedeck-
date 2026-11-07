@@ -440,10 +440,13 @@ def close_targets(targets: list[CleanupTarget]) -> list[tuple[CleanupTarget, str
 def _log_close(t: CleanupTarget, outcome: str) -> None:
     try:
         from ghost_sweeper import _get_sweep_logger
+        # A Claude conversation's / terminal's detail carries its title, which
+        # is display-only and never written to disk.
+        detail = "-" if t.kind in ("claude", "terminal") else t.detail
         _get_sweep_logger().info(
             "USER clean-all %s: %s pid=%d kind=%s rss=%dMB cwd=%s (%s)",
             outcome, t.name, t.pid, t.kind, t.rss_bytes // MIB, t.cwd or "?",
-            t.detail,
+            detail,
         )
     except Exception:
         log.exception("Could not write clean-all action to the sweep log")
