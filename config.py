@@ -84,6 +84,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # Ask Claude stops before a question that could pass this, per calendar
         # month (claude_spend). The hard limit is the workspace's in the Console.
         "monthly_usd": 5.0,
+        # Claude Code conversations "Close quiet Claude chats" never offers,
+        # however quiet (quiet_sessions): any running from one of these
+        # folders, or whose title contains one of these words.
+        "protected_chat_folders": [],
+        "protected_chat_words": [],
     },
     "telegram": {
         # The owner's private chat with his bot (spend_reports). The bot token

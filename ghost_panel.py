@@ -81,12 +81,70 @@ def _open_clean_dialog(parent, ghosts, hogs, note: str, claude_note: str,
                        *, on_finished) -> None:
     """Confirm window for 'clean all': every item is listed and can be
     unticked; nothing closes until the user presses the button."""
+    from idle_cleanup import close_targets, verify_idle
+    _open_checklist(
+        parent,
+        title=tr("🧹 נקה הכל — רק מה שלא פעיל", "🧹 Clean all — idle only"),
+        intro=tr("מה שפעיל לא מופיע כאן בכלל. לפני הסגירה כל תהליך נבדק "
+                 "שוב, ומה שהתעורר בינתיים — לא ייסגר.",
+                 "Anything active is not listed here at all. Each process is "
+                 "checked again before closing, and whatever woke up meanwhile "
+                 "will not be closed."),
+        sections=[(tr("👻 תהליכים נטושים שסיימו", "👻 Abandoned processes that finished"), ghosts),
+                  (tr("💤 תופסים זיכרון ולא פעילים", "💤 Idle and holding memory"), hogs)],
+        notes=(note, claude_note),
+        empty=tr("✓ אין כרגע שום דבר לא פעיל שכדאי לסגור",
+                 "✓ Nothing idle worth closing right now"),
+        verify=verify_idle, closer=close_targets, on_finished=on_finished)
+
+
+def open_quiet_chats_dialog(parent, *, on_finished=lambda: None) -> None:
+    """'Close quiet Claude chats': conversations nobody wrote in for an hour,
+    and the terminals they left, as a checklist. Titles and folders are shown
+    here only, never sent anywhere."""
+    import quiet_sessions
+
+    def _done(result) -> None:
+        if isinstance(result, BaseException):
+            from tkinter import messagebox
+            messagebox.showerror(tr("שיחות Claude שקטות", "Quiet Claude chats"),
+                                 tr(f"החיפוש נכשל:\n{result}", f"The search failed:\n{result}"),
+                                 parent=parent)
+            return
+        sessions, terminals = result
+        minutes = int(quiet_sessions.QUIET_SEC // 60)
+        _open_checklist(
+            parent,
+            title=tr("💬 סגור שיחות Claude שקטות", "💬 Close quiet Claude chats"),
+            intro=tr(f"שיחות שלא נכתב בהן כלום {minutes} דקות לפחות, בלי חיבור פעיל ובלי פקודה "
+                     "שרצה. סגירה משחררת את הזיכרון; השיחה עצמה לא נמחקת, ונפתחת מחדש "
+                     "כשתיכנס אליה באפליקציה. לפני הסגירה כל אחת נבדקת שוב.",
+                     f"Conversations nobody wrote in for at least {minutes} minutes, with no "
+                     "active connection and no running command. Closing frees the memory; the "
+                     "conversation itself is kept and starts again when you open it in the app. "
+                     "Each one is checked again before closing."),
+            sections=[(tr("💬 שיחות שקטות", "💬 Quiet conversations"), sessions),
+                      (tr("🖥 מסופים שנשארו", "🖥 Leftover terminals"), terminals)],
+            notes=(),
+            empty=tr("✓ אין כרגע שיחות Claude שקטות — כל השיחות הפתוחות פעילות",
+                     "✓ No quiet Claude chats right now — every open chat is active"),
+            verify=quiet_sessions.verify, closer=quiet_sessions.close,
+            on_finished=on_finished)
+
+    _run_in_background(parent, quiet_sessions.find, _done)
+
+
+def _open_checklist(parent, *, title: str, intro: str, sections, notes, empty: str,
+                    verify, closer, on_finished) -> None:
+    """A list of CleanupTargets, each with a tick box (all ticked); nothing
+    closes until the user presses the button, and `verify` proves each one
+    still idle right before `closer` closes it."""
     import tkinter as tk
 
-    from idle_cleanup import MIB, close_targets, verify_idle
+    from idle_cleanup import MIB
 
     dlg = tk.Toplevel(parent)
-    dlg.title(tr("נקה הכל — רק מה שלא פעיל", "Clean all — idle only"))
+    dlg.title(title.split(" ", 1)[-1])
     dlg.geometry("640x560")
     dlg.configure(bg=BG)
     try:
@@ -97,14 +155,9 @@ def _open_clean_dialog(parent, ghosts, hogs, note: str, claude_note: str,
 
     hdr = tk.Frame(dlg, bg=PANEL, padx=16, pady=10)
     hdr.pack(fill="x")
-    tk.Label(hdr, text=tr("🧹 נקה הכל — רק מה שלא פעיל", "🧹 Clean all — idle only"),
-             bg=PANEL, fg=CLEAN,
+    tk.Label(hdr, text=title, bg=PANEL, fg=CLEAN,
              font=("Segoe UI", 13, "bold"), anchor=ANCHOR()).pack(fill="x")
-    tk.Label(hdr, text=tr("מה שפעיל לא מופיע כאן בכלל. לפני הסגירה כל תהליך נבדק "
-                          "שוב, ומה שהתעורר בינתיים — לא ייסגר.",
-                          "Anything active is not listed here at all. Each process is "
-                          "checked again before closing, and whatever woke up meanwhile "
-                          "will not be closed."),
+    tk.Label(hdr, text=intro,
              bg=PANEL, fg=DIM, font=("Segoe UI", 9), anchor=ANCHOR(),
              justify=JUSTIFY(), wraplength=600).pack(fill="x", pady=(3, 0))
 
@@ -147,10 +200,17 @@ def _open_clean_dialog(parent, ghosts, hogs, note: str, claude_note: str,
                            bg=PANEL_HI, activebackground=PANEL_HI,
                            selectcolor=PANEL, relief="flat", bd=0,
                            highlightthickness=0).pack(side=SIDE())
-            tk.Label(row, text=f"{t.name}  ·  {t.rss_bytes // MIB:,} MB  ·  PID {t.pid}",
-                     bg=PANEL_HI, fg=FG, font=("Segoe UI", 10, "bold"),
-                     anchor=ANCHOR()).pack(side="top", fill="x")
-            tk.Label(row, text=t.detail, bg=PANEL_HI, fg=DIM, font=("Segoe UI", 8),
+            head = f"{t.name}  ·  {t.rss_bytes // MIB:,} MB  ·  PID {t.pid}"
+            detail = t.detail
+            if t.kind in ("claude", "terminal"):
+                # The conversation's title is what tells the rows apart.
+                title, _sep, rest = t.detail.partition("  ·  ")
+                head = f"{title}  ·  {t.rss_bytes // MIB:,} MB"
+                detail = "  ·  ".join(p for p in (rest, f"{t.name} PID {t.pid}") if p)
+            tk.Label(row, text=head, bg=PANEL_HI, fg=FG, font=("Segoe UI", 10, "bold"),
+                     anchor=ANCHOR(), justify=JUSTIFY(), wraplength=540
+                     ).pack(side="top", fill="x")
+            tk.Label(row, text=detail, bg=PANEL_HI, fg=DIM, font=("Segoe UI", 8),
                      anchor=ANCHOR(), justify=JUSTIFY(), wraplength=540
                      ).pack(side="top", fill="x")
             # Where it runs from and what it runs: without these, ten rows of
@@ -160,19 +220,21 @@ def _open_clean_dialog(parent, ghosts, hogs, note: str, claude_note: str,
                      bg=PANEL_HI, fg=FG, font=("Cascadia Mono", 8),
                      anchor=ANCHOR(), justify=JUSTIFY(), wraplength=540
                      ).pack(side="top", fill="x")
+            # A Claude conversation's command line is long and says nothing
+            # its title does not; those rows carry none.
+            if t.kind in ("claude", "terminal"):
+                continue
             tk.Label(row, text="▶ " + (_shorten(cmd, 180) or no_access),
                      bg=PANEL_HI, fg=DIM, font=("Cascadia Mono", 8),
                      anchor=ANCHOR(), justify=JUSTIFY(), wraplength=540
                      ).pack(side="top", fill="x")
 
-    _section(tr("👻 תהליכים נטושים שסיימו", "👻 Abandoned processes that finished"),
-             ghosts)
-    _section(tr("💤 תופסים זיכרון ולא פעילים", "💤 Idle and holding memory"), hogs)
-    if not ghosts and not hogs:
-        tk.Label(body, text=tr("✓ אין כרגע שום דבר לא פעיל שכדאי לסגור",
-                               "✓ Nothing idle worth closing right now"),
-                 bg=BG, fg=OK_FG, font=("Segoe UI", 11), pady=24).pack(fill="x")
-    for text in (note, claude_note):
+    for section_title, items in sections:
+        _section(section_title, items)
+    if not any(items for _t, items in sections):
+        tk.Label(body, text=empty, bg=BG, fg=OK_FG, font=("Segoe UI", 11), pady=24,
+                 wraplength=580).pack(fill="x")
+    for text in notes:
         if text:
             tk.Label(body, text=text, bg=BG, fg=DIM, font=("Segoe UI", 8),
                      anchor=ANCHOR(), justify=JUSTIFY(), wraplength=580
@@ -205,13 +267,13 @@ def _open_clean_dialog(parent, ghosts, hogs, note: str, claude_note: str,
         summary_var.set(tr(f"✓ נסגרו {len(done)}  ·  שוחררו כ-{mb:,} MB",
                            f"✓ Closed {len(done)}  ·  about {mb:,} MB freed"))
         for t in done:
-            tk.Label(body, text=tr(f"✓ {t.name} (PID {t.pid}) — נסגר",
-                                   f"✓ {t.name} (PID {t.pid}) — closed"),
+            tk.Label(body, text=tr(f"✓ {_who(t)} — נסגר",
+                                   f"✓ {_who(t)} — closed"),
                      bg=BG, fg=OK_FG, font=("Segoe UI", 9), anchor=ANCHOR()
                      ).pack(fill="x", padx=6)
         for t, why in skipped:
-            tk.Label(body, text=tr(f"⏸ {t.name} (PID {t.pid}) — לא נסגר: {why}",
-                                   f"⏸ {t.name} (PID {t.pid}) — not closed: {why}"),
+            tk.Label(body, text=tr(f"⏸ {_who(t)} — לא נסגר: {why}",
+                                   f"⏸ {_who(t)} — not closed: {why}"),
                      bg=BG, fg=WARN_FG, font=("Segoe UI", 9), anchor=ANCHOR()
                      ).pack(fill="x", padx=6)
         for t, outcome in failed:
@@ -221,7 +283,7 @@ def _open_clean_dialog(parent, ghosts, hogs, note: str, claude_note: str,
                    "pid_reused": tr("המספר עבר לתהליך אחר",
                                     "the PID now belongs to another process"),
                    }.get(outcome, outcome)
-            tk.Label(body, text=f"✕ {t.name} (PID {t.pid}) — {why}",
+            tk.Label(body, text=f"✕ {_who(t)} — {why}",
                      bg=BG, fg=BAD, font=("Segoe UI", 9), anchor=ANCHOR()
                      ).pack(fill="x", padx=6)
         on_finished()
@@ -236,8 +298,8 @@ def _open_clean_dialog(parent, ghosts, hogs, note: str, claude_note: str,
                            "Making sure each process is still idle (3 seconds)…"))
 
         def _work():
-            ok, skipped = verify_idle(chosen)
-            return close_targets(ok), skipped
+            ok, skipped = verify(chosen)
+            return closer(ok), skipped
 
         def _done(result) -> None:
             cancel_btn.config(state="normal")
@@ -255,6 +317,14 @@ def _fmt_clock(unix_time: float) -> str:
         return time.strftime("%H:%M", time.localtime(unix_time))
     except (ValueError, OSError):
         return "—"
+
+
+def _who(t) -> str:
+    """How a result line names a target: a Claude conversation or terminal by
+    its title line (ten claude.exe rows say nothing), anything else by name."""
+    if getattr(t, "kind", "") in ("claude", "terminal"):
+        return f"{t.detail.split('  ·  ')[0]} (PID {t.pid})"
+    return f"{t.name} (PID {t.pid})"
 
 
 def _shorten(text: str, limit: int) -> str:
@@ -380,6 +450,29 @@ def open_ghost_panel(parent) -> object:
     tk.Label(hdr, textvariable=subtitle_var, bg=PANEL, fg=DIM,
              font=("Segoe UI", 9), anchor=ANCHOR()).pack(fill="x", pady=(3, 0))
 
+    quiet_label = tr("💬 סגור שיחות Claude שקטות", "💬 Close quiet Claude chats")
+    quiet_btn = tk.Button(hdr, text=quiet_label, bg=PANEL_HI, fg=GHOST,
+                          font=("Segoe UI", 10, "bold"), relief="flat", bd=0,
+                          activebackground=GHOST, activeforeground=BG,
+                          cursor="hand2", padx=14, pady=5)
+    quiet_btn.pack(anchor=ANCHOR(), pady=(8, 0))
+
+    def _quiet_chats() -> None:
+        quiet_btn.config(state="disabled", text=tr("💬 מחפש…", "💬 Searching…"))
+
+        def _restore() -> None:
+            try:
+                quiet_btn.config(state="normal", text=quiet_label)
+            except tk.TclError:
+                pass
+
+        open_quiet_chats_dialog(win, on_finished=_after_clean)
+        # The search runs in the background; the button comes back once the
+        # list window had time to open.
+        win.after(2500, _restore)
+
+    quiet_btn.config(command=_quiet_chats)
+
     # ---- scrollable body ----
     holder = tk.Frame(win, bg=BG)
     holder.pack(fill="both", expand=True)
@@ -455,10 +548,10 @@ def open_ghost_panel(parent) -> object:
                  anchor=ANCHOR(), justify=JUSTIFY(), wraplength=600
                  ).pack(side=SIDE(), fill="x", expand=True, padx=(0, 8))
 
-    def _card(g: GhostProcess, sibling_count: int) -> None:
+    def _card(g: GhostProcess, sibling_count: int, container=None) -> None:
         colour = VERDICT_COLORS.get(g.verdict, GHOST)
 
-        outer = tk.Frame(body, bg=BORDER)
+        outer = tk.Frame(container or body, bg=BORDER)
         outer.pack(fill="x", pady=5, padx=4)
         inner = tk.Frame(outer, bg=PANEL_HI)
         inner.pack(fill="both", expand=True, padx=1, pady=1)
@@ -535,8 +628,9 @@ def open_ghost_panel(parent) -> object:
         # Actions
         actions = tk.Frame(content, bg=PANEL_HI)
         actions.pack(fill="x", pady=(9, 0))
-        # A protected server gets no close button at all.
-        if g.role != ROLE_SERVER:
+        # A protected server gets no close button at all, nor does a part of
+        # an app that is open: closing it breaks the app.
+        if g.role not in (ROLE_SERVER, ROLE_APP_PART):
             tk.Button(actions, text=tr("✕  סגור תהליך", "✕  Close process"),
                       bg=PANEL_HI, fg=BAD,
                       font=("Segoe UI", 9, "bold"), relief="flat", bd=0,
@@ -558,10 +652,41 @@ def open_ghost_panel(parent) -> object:
                   command=lambda gg=g: _ignore_name(gg)
                   ).pack(side="left", padx=(6, 0))
 
+    parts_open = {"value": False}
+
+    def _app_parts_group(parts: list[GhostProcess]) -> None:
+        """One folded line: '🧩 N parts of open apps — not ghosts'. Opened,
+        each part shows as a card with no close button."""
+        box = tk.Frame(body, bg=BG)
+        box.pack(fill="x", pady=(0, 4), padx=4, side="bottom")
+        apps = sorted({_app_name(g) for g in parts})
+        arrow = "▾" if parts_open["value"] else ("◂" if tr("x", "") else "▸")
+        head = tk.Label(
+            box, text=tr(f"{arrow} 🧩 {len(parts)} רכיבים של אפליקציות פתוחות ({', '.join(apps)}) "
+                         f"— לא רפאים, לא נספרים ולא נסגרים",
+                         f"{arrow} 🧩 {len(parts)} parts of open apps ({', '.join(apps)}) "
+                         f"— not ghosts, not counted, not closed"),
+            bg=BG, fg=DIM, font=("Segoe UI", 9), anchor=ANCHOR(), justify=JUSTIFY(),
+            wraplength=690, cursor="hand2")
+        head.pack(fill="x")
+
+        def _toggle(_e=None) -> None:
+            parts_open["value"] = not parts_open["value"]
+            _refresh()
+
+        head.bind("<Button-1>", _toggle)
+        if parts_open["value"]:
+            for g in parts:
+                _card(g, 0, container=box)
+
     def _refresh() -> None:
         for child in body.winfo_children():
             child.destroy()
-        ghosts = sweeper.get_ghosts()
+        everything = sweeper.get_ghosts()
+        # Parts of an app that is open are not ghosts: they are listed apart,
+        # folded, with no close button, and the count leaves them out.
+        ghosts = [g for g in everything if g.role != ROLE_APP_PART]
+        app_parts = [g for g in everything if g.role == ROLE_APP_PART]
 
         last = sweeper.last_scan_time()
         when = (tr(f"נסרק ב-{_fmt_clock(last)}", f"scanned at {_fmt_clock(last)}")
@@ -572,6 +697,9 @@ def open_ghost_panel(parent) -> object:
             f"{len(ghosts)} suspect processes  ·  {when}  ·  "
             f"nothing is closed without your approval"
         ))
+
+        if app_parts:
+            _app_parts_group(app_parts)
 
         if not ghosts:
             tk.Label(body, text=tr("✓ לא נמצאו תהליכים נטושים",

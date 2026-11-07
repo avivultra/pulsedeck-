@@ -862,6 +862,13 @@ class GhostSweeper:
         with self._lock:
             return len(self._ghosts)
 
+    def actionable_count(self) -> int:
+        """Ghosts the user could act on: parts of an app that is open are
+        not counted. The strip's 👻 showed 9 when 5 were the Claude app's own
+        windows, which only the app may close."""
+        with self._lock:
+            return sum(1 for g in self._ghosts if g.role != ROLE_APP_PART)
+
     def last_scan_time(self) -> float | None:
         with self._lock:
             return self._last_scan_wall

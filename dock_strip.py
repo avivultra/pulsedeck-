@@ -84,6 +84,7 @@ def build_dock_menu(root: tk.Misc, a: SimpleNamespace):
     m.add_command(tr("שרתים פתוחים", "Open servers"), a.open_servers, icon="🖧")
     m.add_command(tr("ניקוי תהליכים מיותרים", "Clean up leftover processes"), a.open_janitor, icon="🧹")
     m.add_command(tr("תהליכים שננטשו", "Abandoned processes"), a.open_ghosts, icon="👻")
+    m.add_command(tr("סגור שיחות Claude שקטות", "Close quiet Claude chats"), a.open_quiet_chats, icon="💬")
     m.add_group(tr("תיעודים", "Records"))
     m.add_command(tr("תיעודים רגילים", "Metrics history"), a.open_history, icon="📁")
     m.add_command(tr("תיעודי חריגות", "Spike reports"), a.open_spikes, icon="📂")
@@ -244,6 +245,13 @@ def run_dock_main(args: object) -> None:
             log.exception("Failed to open ghost sweeper panel")
 
     lbl_ghosts.bind("<Button-1>", _open_ghost_panel)
+
+    def _open_quiet_chats(_event=None):
+        try:
+            from ghost_panel import open_quiet_chats_dialog
+            open_quiet_chats_dialog(root)
+        except Exception:
+            log.exception("Failed to open the quiet Claude chats list")
 
     var_line2 = tk.StringVar(value=tr("טוען…", "Loading…"))
     lbl2 = tk.Label(body, textvariable=var_line2, bg=bg, fg=fg, font=_font(9),
@@ -483,7 +491,7 @@ def run_dock_main(args: object) -> None:
             font_text=lambda: f"{font_scale:.0%}",
             ask_claude=_ask_claude, open_live_chart=_open_live_chart, open_alerts=_open_alerts_panel,
             open_servers=_open_servers_panel, open_janitor=_open_janitor_panel,
-            open_ghosts=_open_ghost_panel, open_history=lambda: _open_hist_folder(csv_path),
+            open_ghosts=_open_ghost_panel, open_quiet_chats=_open_quiet_chats, open_history=lambda: _open_hist_folder(csv_path),
             open_spikes=_open_spikes_folder, toggle_pin=_toggle_pin,
             font_smaller=lambda: _bump_font(-0.1), font_larger=lambda: _bump_font(+0.1),
             set_language=_set_language, reset_position=_reset_position,
@@ -581,7 +589,7 @@ def run_dock_main(args: object) -> None:
         try:
             from ghost_sweeper import peek_default_sweeper
             sw = peek_default_sweeper()
-            ghost_n = sw.count() if sw is not None else 0
+            ghost_n = sw.actionable_count() if sw is not None else 0
         except Exception:
             ghost_n = 0
         if ghost_n > 0:

@@ -69,6 +69,10 @@ class CleanupTarget:
     # Shown in the dialog so every row says what it really is.
     cwd: str = ""
     cmdline: str = ""
+    # A file whose date proves the target quiet (a Claude conversation's
+    # transcript, see quiet_sessions); checked again just before closing.
+    stamp_path: str = ""
+    stamp_mtime: float = 0.0
 
 
 # ---------------------------------------------------------------- windows
