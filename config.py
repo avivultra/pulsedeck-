@@ -45,6 +45,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "y": None,           # None = auto-place; otherwise pixel Y
         "font_scale": 1.0,   # 0.7 .. 1.6 — multiplier on font size
         "pinned": True,      # always-on-top: re-asserted every tick when pinned
+        # Windows: no background, only the text, so the strip looks like part
+        # of the taskbar whatever its colour. False brings the dark box back.
+        "transparent": True,
     },
     "hardware": {
         # Lenovo Extreme Cooling button in the dock: "auto" shows it only when

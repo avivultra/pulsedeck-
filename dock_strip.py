@@ -25,6 +25,11 @@ from monitor import HistoryLogger, collect_snapshot, disk_root_path, format_gib_
 from net_readings import read_net_rates
 from temperature_readings import read_gpu_memory_mib, read_gpu_temp_celsius
 
+# The one colour Windows leaves undrawn in the transparent strip. Text edges
+# are smoothed against it, so it is a dark taskbar tone (the owner's is about
+# #20222a): no light halo around the letters there. No text colour equals it.
+TRANSPARENT_KEY = "#1f2129"
+
 
 def _work_area() -> tuple[int, int, int, int] | None:
     """(left, top, right, bottom) of the primary screen minus the taskbar.
@@ -138,6 +143,7 @@ def run_dock_main(args: object) -> None:
     font_scale = float(dock_cfg.get("font_scale", 1.0) or 1.0)
     font_scale = max(0.7, min(1.6, font_scale))
     pinned = bool(dock_cfg.get("pinned", True))
+    transparent = os.name == "nt" and bool(dock_cfg.get("transparent", True))
 
     root = tk.Tk()
     root.title(tr("מוניטור ביצועים", "Performance Monitor"))
@@ -177,6 +183,19 @@ def run_dock_main(args: object) -> None:
     fg = "#dadada"
     accent = "#a882ff"
     dim = "#b3b3b3"
+    if transparent:
+        # Part of the taskbar, not a box on it: Windows does not draw any
+        # pixel of exactly TRANSPARENT_KEY, so only the text shows, on any
+        # taskbar colour, at no cost (the compositor does it). Text in the
+        # taskbar clock's white. Clicks on the transparent pixels reach the
+        # taskbar; the strip is dragged by its text.
+        try:
+            root.attributes("-transparentcolor", TRANSPARENT_KEY)
+            bg, fg, dim = TRANSPARENT_KEY, "#ffffff", "#e6e6e6"
+            taskbar_edge = bg
+            root.configure(bg=bg)
+        except tk.TclError:
+            log.exception("A transparent strip is not supported here; keeping the dark box")
 
     def _font(size_pt: float, bold: bool = False) -> tuple:
         size = max(7, int(round(size_pt * font_scale)))
@@ -325,6 +344,17 @@ def run_dock_main(args: object) -> None:
                 y = max(0, sh - h - 48)
                 x = max(0, (sw - w) // 2)
         root.geometry(f"{w}x{h}+{x}+{y}")
+
+    def _widen_if_clipped() -> None:
+        """Grow the strip, around its centre, when its text no longer fits.
+        The 👻 badge appearing after the width was set cut "GPU" to "PU".
+        Two cached numbers compared; no layout pass unless it is too narrow."""
+        need = min(1200, root.winfo_reqwidth() + 28)
+        have = root.winfo_width()
+        if have <= 1 or need <= have:
+            return
+        x = max(0, root.winfo_x() - (need - have) // 2)
+        root.geometry(f"{need}x{root.winfo_height()}+{x}+{root.winfo_y()}")
 
     def on_close() -> None:
         nonlocal closing
@@ -612,6 +642,8 @@ def run_dock_main(args: object) -> None:
         # position) — saves a layout pass every tick.
         if place_counter <= 2 and saved_x is None and saved_y is None:
             place_window()
+        else:
+            _widen_if_clipped()
         # Re-assert always-on-top so taskbar/other apps can't cover the dock when pinned.
         # Throttle to every 5th tick (~5s) — Windows respects topmost between
         # checks; constant re-assertion was wasted work.
