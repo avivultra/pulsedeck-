@@ -42,7 +42,7 @@ import logging
 import ntpath
 import os
 import time
-from pathlib import Path
+from dataclasses import dataclass
 
 import psutil
 
@@ -85,33 +85,85 @@ def _session_detail(title: str, quiet_sec: float) -> str:
     return tr(f"💬 שיחה בלי כותרת  ·  שקטה {quiet}", f"💬 Untitled conversation  ·  quiet for {quiet}")
 
 
-def protected_settings() -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """(folders, title words) the user protects, from config.json "claude"."""
+@dataclass(frozen=True)
+class Protection:
+    """What the user protects (config.json "claude"). A conversation is
+    protected when ANY rule holds; so is every process it started.
+
+    * title_words: its title contains one (any case);
+    * path_words: its folder's path contains one (any case), wherever it is
+      (E:\\flow-hub, %TEMP%\\flow_isolated_7, ...);
+    * folders: its folder is one of these, or inside one (for folders whose
+      path carries no such word)."""
+    title_words: tuple[str, ...] = ()
+    path_words: tuple[str, ...] = ()
+    folders: tuple[str, ...] = ()
+
+    def chat(self, cwd: str, title: str) -> bool:
+        low_title = (title or "").lower()
+        return any(w in low_title for w in self.title_words) or self.path(cwd)
+
+    def path(self, cwd: str, cmdline: str = "") -> bool:
+        from ghost_sweeper import protected_dir_of
+        low = (cwd or "").lower()
+        if any(w in low for w in self.path_words):
+            return True
+        return protected_dir_of(cwd, cmdline, self.folders) is not None
+
+
+def _words(values) -> tuple[str, ...]:
+    return tuple(str(w).strip().lower() for w in values or [] if str(w).strip())
+
+
+def protection() -> Protection:
+    """The user's rules from config.json; none when it cannot be read."""
     try:
         import config as app_config
         from ghost_sweeper import normalize_dirs
         cfg = app_config.load_config().get("claude", {}) or {}
-        words = tuple(str(w).strip().lower() for w in cfg.get("protected_chat_words") or [] if str(w).strip())
-        return normalize_dirs(cfg.get("protected_chat_folders") or []), words
+        return Protection(title_words=_words(cfg.get("protected_chat_words")),
+                          path_words=_words(cfg.get("protected_path_words")),
+                          folders=normalize_dirs(cfg.get("protected_chat_folders") or []))
     except Exception:
         log.exception("Could not read the protected chats; protecting nothing extra")
-        return (), ()
+        return Protection()
 
 
-def _protected(cwd: str, title: str, dirs: tuple[str, ...], words: tuple[str, ...]) -> bool:
-    from ghost_sweeper import protected_dir_of
-    low = (title or "").lower()
-    return protected_dir_of(cwd, "", dirs) is not None or any(w in low for w in words)
+def guarded(pid: int, cwd: str, cmdline: str, rules: Protection | None = None) -> bool:
+    """True when this process runs from a protected path, or descends from a
+    protected Claude conversation (its python, node, agents, `claude -p`...).
+    Walks the parent chain: call it off the Tk thread, for a few processes."""
+    rules = protection() if rules is None else rules
+    if not (rules.title_words or rules.path_words or rules.folders):
+        return False
+    if rules.path(cwd, cmdline):
+        return True
+    try:
+        parents = psutil.Process(pid).parents()
+    except (psutil.Error, OSError):
+        return False
+    for parent in parents:
+        try:
+            if parent.name().lower() not in ("claude.exe", "claude"):
+                continue
+            pcmd = " ".join(parent.cmdline())
+            if not claude_sessions.is_claude_code(parent.name(), parent.exe(), pcmd):
+                continue
+            if rules.chat(parent.cwd(), claude_sessions.session_title(pcmd) or ""):
+                return True
+        except (psutil.Error, OSError):
+            continue
+    return False
 
 
 def find(now: float | None = None, min_quiet: float = QUIET_SEC,
-         protected: tuple[tuple[str, ...], tuple[str, ...]] | None = None
+         rules: Protection | None = None
          ) -> tuple[list[CleanupTarget], list[CleanupTarget]]:
     """(quiet conversations, their terminals), heaviest first. Blocking (it
     reads connections and a few transcripts' dates): call it off the Tk thread.
-    `protected` = (folders, title words) never offered; default: config.json."""
+    `rules`: what is never offered; default: config.json."""
     now = time.time() if now is None else now
-    dirs, words = protected_settings() if protected is None else protected
+    rules = protection() if rules is None else rules
     exclude = _self_and_ancestors()
     established = _established_pids()
 
@@ -144,7 +196,7 @@ def find(now: float | None = None, min_quiet: float = QUIET_SEC,
         if any(_read(c, "name").lower() not in HARMLESS_CHILDREN for c in children):
             continue
         title = claude_sessions.session_title(cmd) or ""
-        if _protected(cwd, title, dirs, words):
+        if rules.chat(cwd, title):
             continue
         try:
             rss = proc.memory_info().rss
@@ -173,6 +225,8 @@ def find(now: float | None = None, min_quiet: float = QUIET_SEC,
         except (psutil.Error, OSError):
             continue
         key = _norm(cwd)
+        if rules.path(cwd):
+            continue
         if key in closing and key not in staying:
             owner = by_cwd[key].detail.split("  ·  ")[0].removeprefix("💬 ")
             detail = tr(f"🖥 המסוף של {owner}", f"🖥 The terminal of {owner}")

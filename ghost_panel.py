@@ -17,8 +17,10 @@ import time
 from ghost_sweeper import (
     ROLE_APP_PART,
     ROLE_CLAUDE,
+    ROLE_GUARDED,
     ROLE_SERVER,
     VERDICT_COLORS,
+    NOT_ACTIONABLE,
     GhostProcess,
     get_default_sweeper,
     humanize_bytes,
@@ -386,6 +388,12 @@ def describe_role(g: GhostProcess) -> tuple[str, str] | None:
                    f"שקט זה מצב רגיל שלו; לא נכלל ב\"נקה הכל\".",
                    f"🧩 Part of {app} — the app is open (PID {g.parent_pid}). "
                    f"Being quiet is normal for it; not included in \"Clean all\"."))
+    if g.role == ROLE_GUARDED:
+        return (tr("מוגן", "Protected"),
+                tr("🛡 שייך לשיחה או לתיקייה שסימנת כמוגנת (claude.protected_* ב-config.json) "
+                   "— PulseDeck לא מציע לסגור אותו בשום מקום.",
+                   "🛡 Belongs to a chat or folder you marked protected (claude.protected_* in "
+                   "config.json) — PulseDeck never offers to close it."))
     if g.role == ROLE_CLAUDE:
         return (tr("שיחת Claude", "Claude chat"),
                 tr("💬 שיחת Claude Code שמחכה להודעה — לא נכללת ב\"נקה הכל\". "
@@ -630,7 +638,7 @@ def open_ghost_panel(parent) -> object:
         actions.pack(fill="x", pady=(9, 0))
         # A protected server gets no close button at all, nor does a part of
         # an app that is open: closing it breaks the app.
-        if g.role not in (ROLE_SERVER, ROLE_APP_PART):
+        if g.role not in NOT_ACTIONABLE:
             tk.Button(actions, text=tr("✕  סגור תהליך", "✕  Close process"),
                       bg=PANEL_HI, fg=BAD,
                       font=("Segoe UI", 9, "bold"), relief="flat", bd=0,
@@ -691,10 +699,11 @@ def open_ghost_panel(parent) -> object:
         last = sweeper.last_scan_time()
         when = (tr(f"נסרק ב-{_fmt_clock(last)}", f"scanned at {_fmt_clock(last)}")
                 if last else tr("טרם נסרק", "not scanned yet"))
+        actionable = sum(1 for g in ghosts if g.role not in NOT_ACTIONABLE)
         subtitle_var.set(tr(
-            f"{len(ghosts)} תהליכים חשודים  ·  {when}  ·  "
+            f"{actionable} תהליכים חשודים  ·  {when}  ·  "
             f"שום דבר לא נסגר בלי אישור שלך",
-            f"{len(ghosts)} suspect processes  ·  {when}  ·  "
+            f"{actionable} suspect processes  ·  {when}  ·  "
             f"nothing is closed without your approval"
         ))
 

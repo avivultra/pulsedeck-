@@ -243,6 +243,8 @@ def idle_hog_targets(sampler, *, exclude_pids: set[int] | None = None,
                       f"The monitor has been running for less than {int(min_idle // 60)} minutes. "
                       f"In about {left} min it will be able to prove what is idle.")
 
+    import quiet_sessions
+    rules = quiet_sessions.protection()
     exclude = set(exclude_pids or ()) | _self_and_ancestors()
     skip_names = INTERESTING_NAMES | NEVER_REPORT | PROTECTED_NAMES | KEEP_NAMES
     windowed = visible_window_pids()
@@ -287,6 +289,9 @@ def idle_hog_targets(sampler, *, exclude_pids: set[int] | None = None,
             cwd = _read_or_blank(proc, "cwd")
             cmdline = _read_or_blank(proc, "cmdline")
             if protected_dir_of(cwd, cmdline, protected_dirs):
+                continue
+            # A protected Claude chat's folder, or something it started.
+            if quiet_sessions.guarded(info.pid, cwd, cmdline, rules):
                 continue
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue

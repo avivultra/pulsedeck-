@@ -84,11 +84,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
         # Ask Claude stops before a question that could pass this, per calendar
         # month (claude_spend). The hard limit is the workspace's in the Console.
         "monthly_usd": 5.0,
-        # Claude Code conversations "Close quiet Claude chats" never offers,
-        # however quiet (quiet_sessions): any running from one of these
-        # folders, or whose title contains one of these words.
-        "protected_chat_folders": [],
+        # Claude Code conversations PulseDeck never offers to close, however
+        # quiet, nor anything they started (quiet_sessions.Protection): a
+        # title containing one of these words, a folder path containing one
+        # of the path words, or a folder in (or under) the folder list.
+        # Processes running from such a path are protected too.
         "protected_chat_words": [],
+        "protected_path_words": [],
+        "protected_chat_folders": [],
     },
     "telegram": {
         # The owner's private chat with his bot (spend_reports). The bot token

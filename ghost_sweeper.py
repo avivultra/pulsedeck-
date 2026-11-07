@@ -119,6 +119,9 @@ _LEAK_DELTA_BYTES = 50 * 1024 * 1024   # RSS growth that counts as a leak
 ROLE_SERVER = "SERVER"            # runs from a folder the user listed as protected
 ROLE_APP_PART = "APP_PART"        # helper of an app that is still open
 ROLE_CLAUDE = "CLAUDE_SESSION"    # a Claude Code conversation waiting for input
+ROLE_GUARDED = "PROTECTED_CHAT"   # a protected conversation, or what it started
+# Shown, but never closed from PulseDeck and not counted on the strip's 👻.
+NOT_ACTIONABLE = frozenset({ROLE_SERVER, ROLE_APP_PART, ROLE_GUARDED})
 
 # Chromium / Electron helper processes carry this flag (renderer, GPU, network,
 # audio, crashpad...). With the main process alive they are part of an open app.
@@ -774,6 +777,8 @@ class GhostSweeper:
                 title = claude_sessions.session_title(cmdline) or ""
             except Exception:
                 log.debug("Could not read a Claude Code session title", exc_info=True)
+        if role in ("", ROLE_CLAUDE) and _guarded(pid, cwd, cmdline, title, role):
+            role = ROLE_GUARDED
 
         return GhostProcess(
             pid=pid, name=name, exe=exe, cmdline=cmdline, cwd=cwd,
@@ -863,11 +868,12 @@ class GhostSweeper:
             return len(self._ghosts)
 
     def actionable_count(self) -> int:
-        """Ghosts the user could act on: parts of an app that is open are
-        not counted. The strip's 👻 showed 9 when 5 were the Claude app's own
-        windows, which only the app may close."""
+        """Ghosts the user could act on: parts of an app that is open, and
+        protected processes (servers, protected chats), are not counted. The
+        strip's 👻 showed 9 when 5 were the Claude app's own windows, which
+        only the app may close."""
         with self._lock:
-            return sum(1 for g in self._ghosts if g.role != ROLE_APP_PART)
+            return sum(1 for g in self._ghosts if g.role not in NOT_ACTIONABLE)
 
     def last_scan_time(self) -> float | None:
         with self._lock:
@@ -921,6 +927,21 @@ def protected_dir_of(cwd: str, cmdline: str, dirs: tuple[str, ...]) -> str | Non
                 return folder
             idx = text.find(folder, idx + 1)
     return None
+
+
+def _guarded(pid: int, cwd: str, cmdline: str, title: str, role: str) -> bool:
+    """A Claude conversation the user protects (by title or folder), or a
+    process running from a protected path or started by such a conversation.
+    See quiet_sessions.Protection. Runs on the scan thread, for ghosts only."""
+    try:
+        import quiet_sessions
+        rules = quiet_sessions.protection()
+        if role == ROLE_CLAUDE:
+            return rules.chat(cwd, title)
+        return quiet_sessions.guarded(pid, cwd, cmdline, rules)
+    except Exception:
+        log.debug("Could not check the protected chats", exc_info=True)
+        return False
 
 
 def role_of(name: str, exe: str, cmdline: str, cwd: str, parent_alive: bool,
